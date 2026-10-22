@@ -12,10 +12,10 @@ pub struct Editor {
     cursor: usize,
     history: Vec<String>,
     hist_pos: Option<usize>,
-    /// 翻历史之前正在输入的内容
     draft: Vec<char>,
     commands: &'static [Candidate],
     menu_sel: usize,
+    cached_matches: (String, Vec<Candidate>),
 }
 
 impl Editor {
@@ -28,6 +28,7 @@ impl Editor {
             draft: Vec::new(),
             commands,
             menu_sel: 0,
+            cached_matches: (String::new(), Vec::new()),
         }
     }
 
@@ -237,6 +238,9 @@ impl Editor {
             return Vec::new();
         }
         let typed = self.text();
+        if self.cached_matches.0 == typed {
+            return self.cached_matches.1.clone();
+        }
         self.commands
             .iter()
             .copied()

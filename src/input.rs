@@ -60,7 +60,7 @@ pub fn layout(chars: &[char], cursor: usize, width: usize) -> Layout {
 }
 
 /// 要画到终端上的一帧：输入框 + 下方的命令菜单或快捷键提示
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Frame {
     pub lines: Vec<String>,
     /// 终端光标应停在的（行, 显示列），行号相对 `lines` 的第一行
@@ -74,7 +74,6 @@ const HINT: &str = "Enter 发送 · Ctrl-J 换行 · / 命令 · Ctrl-D 退出";
 /// `show_menu` 为 false 时不画菜单与提示（提交后用来收起它们）。
 pub fn frame(ed: &Editor, width: usize, show_menu: bool) -> Frame {
     let width = width.max(20);
-    // 一行的结构：│ ␣ 前缀 ␣ 文本 ␣ │ ，除文本外占 6 列
     let text_w = width - 6;
     let lay = layout(ed.chars(), ed.cursor(), text_w);
     let edge = |s: &str| style(s).cyan().to_string();
@@ -126,15 +125,6 @@ pub fn frame(ed: &Editor, width: usize, show_menu: bool) -> Frame {
     Frame {
         lines,
         cursor: (1 + lay.cursor.0, 4 + lay.cursor.1),
-    }
-}
-
-/// 延迟初始化 hint 文本，支持动态渲染样式（浅色/动漫字体等）
-pub fn render_hint(theme: &str) -> String {
-    match theme {
-        "light" => "Enter 发送 · Ctrl-J 换行 · / 命令 · Ctrl-D 退出".to_string(),
-        "anime" => "✨ Enter 送出 · Ctrl-J 新行 · / 指令 · Ctrl-D 退出".to_string(),
-        _ => HINT.to_string(),
     }
 }
 

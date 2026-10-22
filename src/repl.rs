@@ -3,6 +3,7 @@
 use crate::app::App;
 use crate::commands;
 use crate::editor::{Candidate, Editor};
+use crate::fast_input::read_input_fast;
 use crate::input::Outcome;
 use crate::llm::{ChatOptions, LlmClient, Message};
 use crate::prompt;
@@ -66,7 +67,7 @@ pub async fn run(app: &mut App) -> Result<()> {
 
     loop {
         println!();
-        let input = match prompt::read_input(&mut editor)? {
+        let input = match read_input_fast(&mut editor)? {
             Outcome::Submit(text) => text,
             Outcome::Eof => break,
             Outcome::Interrupt => {

@@ -3,6 +3,7 @@ mod chat;
 mod commands;
 mod config;
 mod editor;
+mod fast_input;
 mod finding;
 mod input;
 mod llm;

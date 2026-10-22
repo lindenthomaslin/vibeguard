@@ -34,28 +34,18 @@ impl Drop for RawMode {
 #[derive(Default)]
 struct Painter {
     cursor_row: usize,
-    last_frame_hash: u64,
+    last_frame: Option<Frame>,
 }
 
 impl Painter {
-    /// 计算帧内容的快速哈希，用于判断是否需要重绘
-    fn frame_hash(f: &Frame) -> u64 {
-        let mut hash = 0u64;
-        for line in &f.lines {
-            for c in line.chars() {
-                hash = hash.wrapping_mul(31).wrapping_add(c as u64);
+    fn draw(&mut self, f: &Frame) -> io::Result<()> {
+        // 跳过完全相同的帧
+        if let Some(ref last) = self.last_frame {
+            if last.lines == f.lines && last.cursor == f.cursor {
+                return Ok(());
             }
         }
-        hash
-    }
-
-    fn draw(&mut self, f: &Frame) -> io::Result<()> {
-        // 如果帧内容没变，跳过重绘（仅当光标和行数相同时）
-        let new_hash = Self::frame_hash(f);
-        if new_hash == self.last_frame_hash && f.lines.len() - 1 == self.cursor_row {
-            return Ok(());
-        }
-        self.last_frame_hash = new_hash;
+        self.last_frame = Some(f.clone());
 
         let mut out = io::stdout().lock();
         if self.cursor_row > 0 {
@@ -98,24 +88,32 @@ pub fn read_input(ed: &mut Editor) -> Result<Outcome> {
 
     let _raw = RawMode::enter()?;
     let mut painter = Painter::default();
+    let width = ui::term_width();
+
     loop {
-        painter.draw(&frame(ed, ui::term_width(), true))?;
+        painter.draw(&frame(ed, width, true))?;
         match event::read()? {
             Event::Key(key) => {
                 let outcome = handle_key(ed, key);
                 if outcome == Outcome::Continue {
                     continue;
                 }
-                // 提交后编辑器已清空，用提交的文本画出最终的框，留在滚动区里
                 let mut shown = Editor::new(&[]);
                 if let Outcome::Submit(text) = &outcome {
                     shown.insert_str(text);
                 }
-                painter.finish(&frame(&shown, ui::term_width(), false))?;
+                painter.finish(&frame(&shown, width, false))?;
                 return Ok(outcome);
             }
             Event::Paste(text) => ed.insert_str(&text),
-            _ => {} // Resize 等事件：下一轮循环按新宽度重绘
+            Event::Resize(_, _) => {
+                // 终端宽度改变，重新缓存
+                let new_width = ui::term_width();
+                if new_width != width {
+                    painter.last_frame = None;
+                }
+            }
+            _ => {}
         }
     }
 }
