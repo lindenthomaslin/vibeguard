@@ -93,7 +93,7 @@ Be precise about this: the conversational core is real, the scanner is a skeleto
 | `vibeguard config show / init / set`, `vibeguard ping` | ✓ works |
 | Vulnerability checklist, scanner, severity model | ~ code exists, **not wired to the UI**, currently dead code |
 | `/demo` — scan → report → per-fix review screens | ~ sample data only, touches no files |
-| CI, packaging, README | ✗ not yet |
+| CI, packaging, licence | ✗ not yet |
 
 Two unit tests in the dead scanner module fail (`vuln_scanner::tests::test_quick_scan` and
 `::test_prioritize`) and are left visible on purpose — they are the reminder that the scanner is
@@ -321,7 +321,8 @@ Conventions worth keeping:
 2. **Make the two failing tests pass, or delete the module.** They are currently a marker, not a
    regression.
 3. **No CI.** `cargo test` plus `cargo clippy -D warnings` on push would have caught the drift.
-4. **No README.** GitHub shows a bare file list; this document is the entry point for now.
+4. **No licence, no CI.** `README.md` covers the landing page; the licence is still unchosen,
+   which makes the repo technically all-rights-reserved.
 5. **`run_command` has no sandbox.** It is opt-in and blocks deletes, but a determined prompt can
    still do damage at `full` permission. A path and command allowlist belongs here.
 6. **One conversation open at a time.** Opening a session replaces the current one; there is no
