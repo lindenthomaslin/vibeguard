@@ -5,6 +5,7 @@
 
 mod form;
 mod layout;
+mod sessions;
 mod state;
 mod view;
 
@@ -12,28 +13,33 @@ use crate::app::App;
 use crate::chat::Entry;
 use crate::commands::{display_value, env_override, source_label};
 use crate::config::{self, Thinking, mask_key};
+use crate::graphics::Graphics;
 use crate::llm::{ChatOptions, ChatResponse, LlmClient, Message, Role, StreamEvent};
+use crate::mode::Mode;
 use crate::repl::SYSTEM_PROMPT;
 use crate::sessions::{Conversation, Store, format_ago};
+use crate::theme::{FontStyle, Look, Theme};
 use crate::ui;
 use anyhow::{Result, bail};
 use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
 use crossterm::execute;
 use form::ModelSettings;
 use ratatui::DefaultTerminal;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use state::{Action, AppState, COMMANDS, SessionItem, start_demo};
+use sessions::SessionItem;
+use state::{Action, Answer, AppState, COMMANDS, start_demo};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use unicode_width::UnicodeWidthStr;
 use view::Props;
 
-const HINT: &str = "Enter 发送 · Ctrl-J 换行 · / 命令 · PgUp/PgDn 滚动 · Ctrl-D 退出";
+const HINT: &str = "Enter 发送 · Ctrl-J 换行 · Shift-Tab 换模式 · / 命令 · Ctrl-D 退出";
 const BUSY_HINT: &str = "Esc 取消 · PgUp/PgDn 滚动";
 
 /// 后台任务发回的消息都带着发起时的请求编号；取消后编号变化，迟到的消息会被丢弃
@@ -43,19 +49,37 @@ enum Msg {
     Content(u64, String),
     Retry(u64, String),
     Done(u64, Result<(ChatResponse, Duration)>),
-    ToolSuggestion {
+    /// 自动模式下已经写好的改动，回放给用户看
+    Diff {
+        req: u64,
         path: String,
-        old_code: String,
-        new_code: String,
+        old: String,
+        new: String,
+    },
+    /// 逐条确认模式下，一处改动等着用户点头。任务会停在这里等 `reply`
+    Proposal {
+        req: u64,
+        path: String,
+        old: String,
+        new: String,
+        reply: oneshot::Sender<bool>,
+    },
+    /// 用户确认之后写入的结果
+    Applied {
+        req: u64,
+        path: String,
+        ok: bool,
     },
     Tick,
 }
 
 /// 进入全屏界面，直到用户退出。终端状态在返回前（含出错、panic）都会还原。
 pub async fn run(app: &mut App) -> Result<()> {
+    // 查询终端图形协议要在接管终端之前做完：子进程会临时切换终端模式
+    let gfx = Graphics::detect();
     let mut terminal = ratatui::try_init()?;
     let _ = execute!(io::stdout(), EnableBracketedPaste);
-    let result = event_loop(app, &mut terminal).await;
+    let result = event_loop(app, &mut terminal, gfx).await;
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
@@ -82,11 +106,21 @@ struct Session<'a> {
     req: u64,
     /// 正在进行的请求对应的用户输入，成功后才写入对话
     pending_user: Option<String>,
+    /// 逐条确认模式下，还在等用户答复的那个后台任务
+    pending_reply: Option<oneshot::Sender<bool>>,
+    /// 用户选了「本次全部应用」：这一轮请求剩下的改动不再逐条询问
+    always_apply: Arc<AtomicBool>,
     last_usage: String,
     cwd: String,
+    /// 终端原生图片（不支持时是空的，启动画面退回字标）
+    gfx: Graphics,
+    /// 启动画面只在还没开口时显示
+    show_banner: bool,
+    /// 需要整屏重绘：原生图片从画面上消失后，旧图会留在终端里
+    repaint: bool,
 }
 
-async fn event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
+async fn event_loop(app: &mut App, terminal: &mut DefaultTerminal, gfx: Graphics) -> Result<()> {
     let (tx, mut rx) = unbounded_channel();
 
     // 键盘线程：带超时轮询，便于退出时停下
@@ -137,8 +171,13 @@ async fn event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()>
         task: None,
         req: 0,
         pending_user: None,
+        pending_reply: None,
+        always_apply: Arc::new(AtomicBool::new(false)),
         last_usage: String::new(),
         cwd,
+        gfx,
+        show_banner: true,
+        repaint: false,
     };
     session.welcome();
 
@@ -175,6 +214,7 @@ async fn event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()>
 }
 
 impl Session<'_> {
+    /// 启动画面不写进对话记录，由 `view` 画在对话区顶部；这里只准备下面的提示
     fn welcome(&mut self) {
         if self.app.effective().api_key.is_none() {
             self.state.push(Entry::Warn(
@@ -197,7 +237,14 @@ impl Session<'_> {
     }
 
     fn draw(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        // 原生图片是终端直接画在屏幕上的，位置变了不会自己消失，得整屏重绘一次。
+        // 清屏前 ratatui 会问一次光标位置，个别终端不回这个报告：那就算了，
+        // 顶多留下一张没擦干净的图，不能因为一张图退出。
+        if std::mem::take(&mut self.repaint) {
+            let _ = terminal.clear();
+        }
         let cfg = self.app.effective();
+        let look = Look::from_config(&cfg);
         let thinking = cfg.thinking.to_string();
         let choice = self.state.choice();
         let (input, cursor) = {
@@ -217,6 +264,13 @@ impl Session<'_> {
         };
         let input_label = self.state.input_label();
         let input_active = self.state.input_active();
+        // 逐条确认时任务停在等答复上，说「等待响应」会让人以为在等网络
+        let busy = if self.state.is_confirming() {
+            Some("等你确认…".to_string())
+        } else {
+            self.state.busy.clone()
+        };
+        let (avatar, banner) = self.gfx.split();
         terminal.draw(|f| {
             view::draw(
                 f,
@@ -230,12 +284,19 @@ impl Session<'_> {
                     input_label,
                     input_active,
                     choice: choice.as_ref(),
-                    focus_last: self.state.review.is_some(),
-                    busy: self.state.busy.as_deref(),
+                    sessions: self.state.sessions.as_ref(),
+                    // 确认和逐条修复时把卡片顶部钉住，矮终端上图标栏也收起来让位
+                    focus_last: self.state.review.is_some() || self.state.is_confirming(),
+                    busy: busy.as_deref(),
                     tick: self.state.tick,
                     status: &status,
+                    mode: self.state.mode,
+                    look,
                     input_tokens,
                     scroll: &mut self.state.scroll,
+                    avatar,
+                    banner,
+                    show_banner: self.show_banner,
                 },
             );
         })?;
@@ -255,8 +316,14 @@ impl Session<'_> {
             Msg::Term(Event::Key(key)) => match self.state.on_key(key) {
                 Action::None => {}
                 Action::Quit => return true,
-                Action::Chat(text) => self.start_chat(text),
-                Action::Command(parts) => self.command(parts),
+                Action::Chat(text) => {
+                    self.set_banner(false);
+                    self.start_chat(text);
+                }
+                Action::Command(parts) => {
+                    self.set_banner(false);
+                    self.command(parts);
+                }
                 Action::Cancel => self.cancel(),
                 Action::SaveModel(settings) => match self.save_settings(&settings) {
                     Ok(()) => self.state.close_form(),
@@ -270,27 +337,68 @@ impl Session<'_> {
                         self.state.push(Entry::Error(format!("{e:#}")));
                     }
                 }
+                Action::DeleteSession(id) => self.delete_session(&id),
+                Action::Answer(answer) => self.answer(answer),
+                Action::CycleTheme => {
+                    let theme = Theme::parse(&self.app.effective().theme).unwrap_or_default();
+                    self.set_theme(theme.next());
+                }
             },
             Msg::Term(Event::Paste(text)) => self.state.on_paste(&text),
-            Msg::Term(_) => {} // Resize 等：下面统一重绘
+            // 窗口尺寸变了，启动画面可能换档或者被收起，顺带整屏重绘一次
+            Msg::Term(Event::Resize(..)) => self.repaint = true,
+            Msg::Term(_) => {} // 其余事件：下面统一重绘
             Msg::Reasoning(req, s) if req == self.req => self.state.on_reasoning(&s),
             Msg::Content(req, s) if req == self.req => self.state.on_content(&s),
             Msg::Retry(req, s) if req == self.req => self.state.push(Entry::Warn(s)),
-            Msg::ToolSuggestion { path, old_code, new_code } => {
-                self.state.push(Entry::ToolSuggestion {
-                    path,
-                    old_code,
-                    new_code,
-                });
+            Msg::Diff {
+                req,
+                path,
+                old,
+                new,
+            } if req == self.req => {
+                self.state.push(Entry::Diff { path, old, new });
+            }
+            Msg::Proposal {
+                req,
+                path,
+                old,
+                new,
+                reply,
+            } if req == self.req => {
+                self.pending_reply = Some(reply);
+                self.state.ask_confirm(path, old, new);
+            }
+            Msg::Applied { req, path, ok } if req == self.req => {
+                let text = if ok {
+                    Entry::Success(format!("已写入 {path}"))
+                } else {
+                    Entry::Warn(format!("{path} 写入失败，原因见下面的工具返回"))
+                };
+                self.state.push(text);
             }
             Msg::Done(req, result) if req == self.req => self.finish_chat(result),
             // 已取消请求的迟到消息
-            Msg::Reasoning(..) | Msg::Content(..) | Msg::Retry(..) | Msg::Done(..) | Msg::ToolSuggestion { .. } => {
+            Msg::Reasoning(..)
+            | Msg::Content(..)
+            | Msg::Retry(..)
+            | Msg::Done(..)
+            | Msg::Diff { .. }
+            | Msg::Proposal { .. }
+            | Msg::Applied { .. } => {
                 return false;
             }
         }
         *dirty = true;
         false
+    }
+
+    /// 收起或恢复启动画面。原生图片不会自己消失，切换时要整屏重绘一次。
+    fn set_banner(&mut self, show: bool) {
+        if self.show_banner != show {
+            self.show_banner = show;
+            self.repaint = true;
+        }
     }
 
     /// 为新的后台任务分配编号
@@ -301,6 +409,7 @@ impl Session<'_> {
 
     fn finish_task(&mut self) {
         self.task = None;
+        self.pending_reply = None;
         self.state.end_request();
     }
 
@@ -315,8 +424,10 @@ impl Session<'_> {
                 return;
             }
         };
+        let mode = self.state.mode;
+        let system = format!("{SYSTEM_PROMPT}{}", mode.instruction());
         let mut messages = Vec::with_capacity(self.conv.messages.len() + 2);
-        messages.push(Message::system(SYSTEM_PROMPT));
+        messages.push(Message::system(&system));
         messages.extend(self.conv.messages.iter().cloned());
         messages.push(Message::user(input.as_str()));
 
@@ -324,7 +435,14 @@ impl Session<'_> {
         self.pending_user = Some(input);
         let req = self.next_req();
         let tx = self.tx.clone();
-        let perm = self.app.file.permission_mode.clone();
+        // 计划模式一律只读：配置里就算给了全权限，也不该在这档里动文件
+        let perm = match mode {
+            Mode::Plan => crate::tools::PermissionMode::ReadOnly,
+            Mode::Confirm | Mode::Auto => self.app.file.permission_mode.clone(),
+        };
+        // 「本次全部应用」只对当前这一轮有效，下一轮重新问
+        self.always_apply.store(false, Ordering::Relaxed);
+        let always = self.always_apply.clone();
         let tools = crate::tools::tool_definitions();
 
         self.task = Some(tokio::spawn(async move {
@@ -374,29 +492,67 @@ impl Session<'_> {
                             for call in &res.tool_calls {
                                 let tool_name = &call.function.name;
                                 let tool_args = &call.function.arguments;
-                                let tool_result = crate::tools::execute_tool(tool_name, tool_args, &perm);
+                                let is_write =
+                                    matches!(tool_name.as_str(), "edit_file" | "write_file");
+                                let (path, old_code, new_code) =
+                                    write_preview(tool_name, tool_args);
 
-                                // 对于代码修改操作，显示建议卡片
-                                if tool_name == "edit_file" || tool_name == "write_file" {
-                                    // 提取路径和代码
-                                    if let Ok(args) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(tool_args) {
-                                        if let (Some(path), Some(content)) = (
-                                            args.get("path").and_then(|v| v.as_str()),
-                                            args.get("content").or_else(|| args.get("new_str")).and_then(|v| v.as_str()),
-                                        ) {
-                                            let old_code = if tool_name == "edit_file" {
-                                                args.get("old_str").and_then(|v| v.as_str()).unwrap_or("").to_string()
-                                            } else {
-                                                String::new()
-                                            };
+                                // 计划模式：写操作直接挡回去，让模型把建议写进报告
+                                if is_write && mode == Mode::Plan {
+                                    messages.push(Message::tool_result(
+                                        call.id.clone(),
+                                        "计划模式下不能修改文件：请把修复建议写进报告，\
+                                         由用户切换到逐条确认或全自动模式后再动手。"
+                                            .to_string(),
+                                    ));
+                                    continue;
+                                }
 
-                                            // 显示建议卡片
-                                            events.send(Msg::ToolSuggestion {
-                                                path: path.to_string(),
-                                                old_code,
-                                                new_code: content.to_string(),
-                                            }).ok();
-                                        }
+                                // 逐条确认：先把改动摊给用户看，等他点头再写
+                                if is_write
+                                    && mode == Mode::Confirm
+                                    && !always.load(Ordering::Relaxed)
+                                {
+                                    let (reply, answer) = oneshot::channel();
+                                    let sent = events.send(Msg::Proposal {
+                                        req,
+                                        path: path.clone(),
+                                        old: old_code.clone(),
+                                        new: new_code.clone(),
+                                        reply,
+                                    });
+                                    // 发不出去说明界面已经关了，这个任务也没有存在的意义
+                                    if sent.is_err() {
+                                        return;
+                                    }
+                                    if !answer.await.unwrap_or(false) {
+                                        messages.push(Message::tool_result(
+                                            call.id.clone(),
+                                            "用户拒绝了这个改动。不要重试，继续处理下一个问题。"
+                                                .to_string(),
+                                        ));
+                                        continue;
+                                    }
+                                }
+
+                                let tool_result =
+                                    crate::tools::execute_tool(tool_name, tool_args, &perm);
+                                let ok = !tool_result.starts_with("错误");
+
+                                if is_write {
+                                    if mode == Mode::Confirm {
+                                        let _ = events.send(Msg::Applied {
+                                            req,
+                                            path: path.clone(),
+                                            ok,
+                                        });
+                                    } else {
+                                        let _ = events.send(Msg::Diff {
+                                            req,
+                                            path: path.clone(),
+                                            old: old_code.clone(),
+                                            new: new_code.clone(),
+                                        });
                                     }
                                 }
 
@@ -412,6 +568,18 @@ impl Session<'_> {
             };
             let _ = tx.send(Msg::Done(req, result));
         }));
+    }
+
+    /// 逐条确认的答复：关掉卡片，把结果送回还在等着的后台任务
+    fn answer(&mut self, answer: Answer) {
+        if answer == Answer::Always {
+            self.always_apply.store(true, Ordering::Relaxed);
+        }
+        self.state.close_confirm(answer);
+        if let Some(reply) = self.pending_reply.take() {
+            // 任务已经结束（比如用户刚取消）时发送会失败，忽略即可
+            let _ = reply.send(answer.approved());
+        }
     }
 
     fn finish_chat(&mut self, result: Result<(ChatResponse, Duration)>) {
@@ -443,6 +611,7 @@ impl Session<'_> {
         }
         self.next_req(); // 让已经在路上的消息作废
         self.pending_user = None;
+        self.pending_reply = None;
         self.state.end_request();
         self.state.push(Entry::Warn("已取消".into()));
     }
@@ -495,6 +664,8 @@ impl Session<'_> {
         self.conv = fresh_conversation(&self.store, &self.app.effective().model);
         self.state.transcript.clear();
         self.last_usage.clear();
+        // 空对话重新显示启动画面
+        self.set_banner(true);
         if had_messages {
             self.state.push(Entry::Success(
                 "已开始新对话，之前的对话已保存，可用 /resume 或 /sessions 找回".into(),
@@ -528,6 +699,8 @@ impl Session<'_> {
     fn load_conversation(&mut self, conv: Conversation) {
         self.state.transcript.clear();
         self.last_usage.clear();
+        // 已经有内容了，不再显示启动画面
+        self.set_banner(false);
         self.state.push(Entry::Info(format!(
             "已恢复对话「{}」· {} 轮 · {}",
             conv.title,
@@ -548,73 +721,39 @@ impl Session<'_> {
         self.conv = conv;
     }
 
-    fn list_sessions(&mut self) -> Result<()> {
-        let listing = self.store.list()?;
-        if listing.skipped > 0 {
+    /// `/sessions` 和 `/search` 共用：读一遍目录，把列表和正文开头交给面板，
+    /// 之后过滤都在内存里做
+    fn open_sessions_panel(&mut self, query: &str) -> Result<()> {
+        let (entries, skipped) = self.store.catalog()?;
+        if skipped > 0 {
             self.state.push(Entry::Warn(format!(
-                "有 {} 个对话文件无法读取，已跳过（{}）",
-                listing.skipped,
+                "有 {skipped} 个对话文件无法读取，已跳过（{}）",
                 ui::tilde(self.store.dir())
             )));
         }
         let now = now_secs();
-        let items: Vec<SessionItem> = listing
-            .items
+        let items: Vec<SessionItem> = entries
             .into_iter()
-            .filter(|s| s.id != self.conv.id)
-            .map(|s| SessionItem {
-                id: s.id,
-                when: format_ago(s.updated, now),
-                text: format!("{} · {} 轮 · {}", s.title, s.turns, s.model),
+            .filter(|e| e.summary.id != self.conv.id)
+            .map(|e| {
+                let when = format_ago(e.summary.updated, now);
+                SessionItem::from_catalog(e, when)
             })
             .collect();
         if items.is_empty() {
             self.state.push(Entry::Info("还没有历史对话".into()));
             return Ok(());
         }
-        self.state.push(Entry::Info(format!(
-            "共 {} 个历史对话，↑↓ 选择，Enter 恢复",
-            items.len()
-        )));
-        self.state.open_sessions("选择对话", items);
+        self.state.open_sessions(items, query);
         Ok(())
     }
 
-    fn search_sessions(&mut self, query: &str) -> Result<()> {
-        if query.trim().is_empty() {
-            bail!("用法：/search 关键词");
+    /// 面板里删掉一个对话：先动磁盘，成功了再让面板把它从列表里去掉
+    fn delete_session(&mut self, id: &str) {
+        match self.store.delete(id) {
+            Ok(()) => self.state.forget_session(id),
+            Err(e) => self.state.sessions_notice(format!("{e:#}"), true),
         }
-        let result = self.store.search(query)?;
-        if result.skipped > 0 {
-            self.state.push(Entry::Warn(format!(
-                "有 {} 个对话文件无法读取，已跳过",
-                result.skipped
-            )));
-        }
-        if result.hits.is_empty() {
-            self.state
-                .push(Entry::Info(format!("没有找到包含「{query}」的对话")));
-            return Ok(());
-        }
-        let now = now_secs();
-        self.state.push(Entry::Info(format!(
-            "找到 {} 个对话包含「{query}」，↑↓ 选择，Enter 恢复",
-            result.hits.len()
-        )));
-        let items = result
-            .hits
-            .into_iter()
-            .map(|h| {
-                let who = if h.role == Role::User { "你" } else { "AI" };
-                SessionItem {
-                    id: h.summary.id,
-                    when: format_ago(h.summary.updated, now),
-                    text: format!("{} · {who}：{}", h.summary.title, h.snippet),
-                }
-            })
-            .collect();
-        self.state.open_sessions(&format!("搜索「{query}」"), items);
-        Ok(())
     }
 
     // ---- 斜杠命令 ----
@@ -629,12 +768,16 @@ impl Session<'_> {
     fn run_command(&mut self, parts: &[String]) -> Result<()> {
         let args: Vec<&str> = parts.iter().skip(1).map(String::as_str).collect();
         match parts.first().map(String::as_str).unwrap_or("") {
-            "help" | "h" | "?" => self.state.push(Entry::Block(help_lines())),
+            "help" | "h" | "?" => {
+                let look = Look::from_config(&self.app.effective());
+                self.state.push(Entry::Block(help_lines(&look)));
+            }
             "demo" => start_demo(&mut self.state),
             "clear" | "new" => self.new_conversation(),
             "resume" => self.resume_latest()?,
-            "sessions" | "history" => self.list_sessions()?,
-            "search" => self.search_sessions(&args.join(" "))?,
+            "sessions" | "history" => self.open_sessions_panel("")?,
+            // 关键词直接带进面板的搜索框，进去还能继续改
+            "search" => self.open_sessions_panel(&args.join(" "))?,
             "config" => self.config(&args)?,
             // API 地址、API Key、模型、思考力度都在同一个表单里；旧命令名保留为别名
             "model" | "apikey" | "baseurl" | "url" => {
@@ -663,6 +806,30 @@ impl Session<'_> {
                 }
                 _ => bail!("用法：/thinking [auto|off|low|high|max]"),
             },
+            "mode" => match args.as_slice() {
+                [] => self.state.push(Entry::Block(self.mode_lines())),
+                [name] => match Mode::parse(name) {
+                    Some(mode) => self.state.set_mode(mode),
+                    None => bail!("模式可选值为 plan / confirm / auto"),
+                },
+                _ => bail!("用法：/mode [plan|confirm|auto]"),
+            },
+            "theme" => match args.as_slice() {
+                [] => self.state.push(Entry::Block(self.appearance_lines())),
+                [name] => match Theme::parse(name) {
+                    Some(theme) => self.set_theme(theme),
+                    None => bail!("主题可选值为 dark / light"),
+                },
+                _ => bail!("用法：/theme [dark|light]"),
+            },
+            "font" => match args.as_slice() {
+                [] => self.state.push(Entry::Block(self.appearance_lines())),
+                [name] => match FontStyle::parse(name) {
+                    Some(font) => self.set_font(font),
+                    None => bail!("字形可选值为 default / anime"),
+                },
+                _ => bail!("用法：/font [default|anime]"),
+            },
             "permissions" => match args.as_slice() {
                 [] => self.show_permissions(),
                 [mode] => {
@@ -670,9 +837,6 @@ impl Session<'_> {
                 }
                 _ => bail!("用法：/permissions [readonly|editable|full] [工作目录]"),
             },
-            name @ ("scan" | "fix" | "report") => {
-                self.state.push(Entry::Warn(format!("/{name} 尚在开发中")));
-            }
             "" => bail!("请输入命令，/help 查看可用命令"),
             other => bail!("未知命令 /{other}，/help 查看可用命令"),
         }
@@ -780,6 +944,104 @@ impl Session<'_> {
         self.state.push(Entry::Block(lines));
     }
 
+    /// `/theme` 和 `/font` 不带参数时共用这张表：两个维度一起看才选得明白
+    fn appearance_lines(&self) -> Vec<Line<'static>> {
+        let cfg = self.app.effective();
+        let look = Look::from_config(&cfg);
+        let theme = Theme::parse(&cfg.theme).unwrap_or_default();
+        let font = FontStyle::parse(&cfg.font_style).unwrap_or_default();
+        let dim = Style::new().add_modifier(Modifier::DIM);
+
+        let mut out = vec![Line::from(vec![
+            Span::styled("外观 ", Style::new().add_modifier(Modifier::BOLD)),
+            Span::raw(format!("主题 {} · 字形 {}", theme.label(), font.label())),
+        ])];
+        let themes = Theme::ALL.map(|t| {
+            let desc = match t {
+                Theme::Dark => "深色底，亮色字",
+                Theme::Light => "浅色底，深色字",
+            };
+            (t == theme, t.label(), desc)
+        });
+        let fonts = FontStyle::ALL.map(|f| {
+            let desc = match f {
+                FontStyle::Default => "朴素框线，圆点标记",
+                FontStyle::Anime => "圆角框 + 星星爱心，主色樱花粉",
+            };
+            (f == font, f.label(), desc)
+        });
+        for (on, name, desc) in themes.into_iter().chain(fonts) {
+            let (mark, style) = if on {
+                (
+                    "›",
+                    Style::new()
+                        .fg(look.palette.accent)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                (" ", dim)
+            };
+            out.push(Line::from(vec![
+                Span::styled(format!("  {mark} {name:<8}"), style),
+                Span::styled(desc, if on { Style::new() } else { dim }),
+            ]));
+        }
+        out.push(Line::styled(
+            "  Ctrl-T 换主题 · /theme light · /font anime · /config set theme light 长期生效",
+            dim,
+        ));
+        out
+    }
+
+    /// 换配色。只改本次会话，要长期生效用 /config set theme
+    fn set_theme(&mut self, theme: Theme) {
+        self.app.overrides.theme = Some(theme.label().to_string());
+        self.state
+            .push(Entry::Success(format!("界面主题：{}", theme.label())));
+    }
+
+    /// 换字形（框线形状 + 标记符号）
+    fn set_font(&mut self, font: FontStyle) {
+        self.app.overrides.font_style = Some(font.label().to_string());
+        let hint = match font {
+            FontStyle::Default => "朴素框线，圆点标记",
+            FontStyle::Anime => "圆角框 + 星星爱心",
+        };
+        self.state
+            .push(Entry::Success(format!("字形：{}（{hint}）", font.label())));
+    }
+
+    /// `/mode` 不带参数时列出三档，标出当前这一档
+    fn mode_lines(&self) -> Vec<Line<'static>> {
+        let dim = Style::new().add_modifier(Modifier::DIM);
+        let mut out = vec![Line::from(vec![
+            Span::styled("工作模式 ", Style::new().add_modifier(Modifier::BOLD)),
+            Span::raw(format!("当前「{}」", self.state.mode.title())),
+        ])];
+        let look = Look::from_config(&self.app.effective());
+        for mode in Mode::ALL {
+            let current = mode == self.state.mode;
+            let (mark, style) = if current {
+                ("›", Style::new().fg(look.chip(mode)).add_modifier(Modifier::BOLD))
+            } else {
+                (" ", dim)
+            };
+            out.push(Line::from(vec![
+                // 8 列 = 最长的 "confirm" 再加一格，三行说明才会对齐
+                Span::styled(format!("  {mark} {:<8}", mode.label()), style),
+                Span::styled(
+                    mode.describe(),
+                    if current { Style::new() } else { dim },
+                ),
+            ]));
+        }
+        out.push(Line::styled(
+            "  Shift-Tab / Ctrl-P 循环切换，也可以 /mode plan",
+            dim,
+        ));
+        out
+    }
+
     fn set_permission_mode(&mut self, mode: &str) -> Result<()> {
         self.app.file.set("permission_mode", mode)?;
         self.app.save()?;
@@ -789,6 +1051,32 @@ impl Session<'_> {
         )));
         Ok(())
     }
+}
+
+/// 从工具参数里取出路径和改动前后的代码，供确认卡片和 diff 显示
+fn write_preview(tool_name: &str, args_json: &str) -> (String, String, String) {
+    let Ok(args) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(args_json)
+    else {
+        return (String::new(), String::new(), String::new());
+    };
+    let text = |key: &str| {
+        args.get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    // write_file 用 content，edit_file 用 new_str
+    let old = if tool_name == "edit_file" {
+        text("old_str")
+    } else {
+        String::new()
+    };
+    let new = if tool_name == "write_file" {
+        text("content")
+    } else {
+        text("new_str")
+    };
+    (text("path"), old, new)
 }
 
 /// 表单里会被环境变量覆盖的配置项：（配置键, 表单里的名字）
@@ -822,17 +1110,14 @@ fn saved_lines(path: &str, s: &ModelSettings) -> Vec<Line<'static>> {
     ]
 }
 
-fn help_lines() -> Vec<Line<'static>> {
+fn help_lines(look: &Look) -> Vec<Line<'static>> {
     let name_w = COMMANDS.iter().map(|c| c.name.len()).max().unwrap_or(0) + 2;
     let dim = Style::new().add_modifier(Modifier::DIM);
     let mut out: Vec<Line<'static>> = COMMANDS
         .iter()
         .map(|c| {
             Line::from(vec![
-                Span::styled(
-                    format!("  {:<name_w$}", c.name),
-                    Style::new().fg(Color::Cyan),
-                ),
+                Span::styled(format!("  {:<name_w$}", c.name), look.accent()),
                 Span::raw(c.desc),
             ])
         })
@@ -844,6 +1129,10 @@ fn help_lines() -> Vec<Line<'static>> {
     ));
     out.push(Line::styled(
         "  Ctrl-J 换行 · PgUp/PgDn 滚动 · Ctrl-B 到顶部 · Ctrl-G 到底部",
+        dim,
+    ));
+    out.push(Line::styled(
+        "  Shift-Tab / Ctrl-P 切换模式：plan 只读出报告 · confirm 每改一处确认 · auto 全自动",
         dim,
     ));
     out
@@ -892,9 +1181,38 @@ mod tests {
 
     #[test]
     fn help_lists_every_command() {
-        let text: Vec<String> = help_lines().iter().map(crate::chat::line_text).collect();
+        let text: Vec<String> = help_lines(&Look::default())
+            .iter()
+            .map(crate::chat::line_text)
+            .collect();
         for c in COMMANDS {
             assert!(text.iter().any(|l| l.contains(c.name)), "missing {}", c.name);
         }
+    }
+
+    /// 帮助面板里的命令名以前写死成 Color::Cyan，浅色主题下几乎看不见
+    #[test]
+    fn help_paints_the_command_names_with_the_current_accent() {
+        let look = |theme: &str| {
+            let mut cfg = crate::config::Config::default();
+            cfg.theme = theme.into();
+            Look::from_config(&cfg)
+        };
+        let name_colour = |look: &Look| {
+            help_lines(look)
+                .into_iter()
+                .find(|l| crate::chat::line_text(l).contains("/help"))
+                .and_then(|l| l.spans.into_iter().next())
+                .and_then(|s| s.style.fg)
+        };
+
+        let (light, dark) = (look("light"), look("dark"));
+        assert_eq!(name_colour(&light), Some(light.palette.accent));
+        assert_eq!(name_colour(&dark), Some(dark.palette.accent));
+        assert_ne!(
+            name_colour(&light),
+            name_colour(&dark),
+            "浅色和深色主题的命令名颜色应该不同"
+        );
     }
 }

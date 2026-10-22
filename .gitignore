@@ -1,1 +1,7 @@
 /target
+
+# macOS
+.DS_Store
+
+# 本地跑出来的对话记录（--config 指到项目里时会落在这里）
+sessions/

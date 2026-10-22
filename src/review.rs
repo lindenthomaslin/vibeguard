@@ -1,6 +1,7 @@
 //! 逐条确认修复的流程，以及用于预览界面的演示数据。
 
 use crate::finding::{Finding, Fix, Severity, sorted};
+use crate::theme::Look;
 use crate::{scan_ui, ui};
 use anyhow::{Result, bail};
 use dialoguer::Select;
@@ -106,11 +107,11 @@ pub fn review_interactive(findings: &[Finding], fixes: &[Fix]) -> Result<Vec<Fix
     review_with(findings, fixes, |finding, fix, index, total| {
         let width = ui::term_width();
         println!();
-        for line in scan_ui::finding_card(finding, index, total, width) {
+        for line in scan_ui::finding_card(finding, index, total, width, &Look::default()) {
             println!("{line}");
         }
         println!();
-        for line in scan_ui::diff_lines(fix, 3, width) {
+        for line in scan_ui::diff_lines(fix, 3, width, &Look::default()) {
             println!("{line}");
         }
         println!();
@@ -202,7 +203,7 @@ pub fn run_demo() -> Result<()> {
     let (findings, fixes) = demo_data();
     ui::warn("演示模式：以下是示例数据，不会读取或修改任何文件");
     println!();
-    for line in scan_ui::summary_lines(&findings) {
+    for line in scan_ui::summary_lines(&findings, &Look::default()) {
         println!("{line}");
     }
     let accepted = review_interactive(&findings, &fixes)?;

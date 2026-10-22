@@ -1,11 +1,13 @@
 //! 全屏界面的应用状态：处理按键与后台事件，不碰终端，便于测试。
 
 use super::form::{FormEvent, ModelForm, ModelSettings};
+use super::sessions::{Event as PanelEvent, SessionItem, SessionsPanel};
 use super::view::Choice;
 use crate::chat::{Entry, Scroll, Transcript};
 use crate::editor::{Candidate, Editor};
 use crate::finding::{Finding, Fix};
 use crate::input::{Outcome, handle_key};
+use crate::mode::Mode;
 use crate::review;
 use crate::review::{Decision, Reviewer};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -13,23 +15,24 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 /// 输入 `/` 时弹出的命令菜单
 pub const COMMANDS: &[Candidate] = &[
     Candidate { name: "/model", desc: "配置 API 地址、API Key、模型与思考力度" },
+    Candidate { name: "/mode", desc: "切换工作模式：计划 / 逐条确认 / 全自动" },
+    Candidate { name: "/theme", desc: "切换配色：dark / light（Ctrl-T）" },
+    Candidate { name: "/font", desc: "切换字形：default / anime" },
     Candidate { name: "/permissions", desc: "配置权限模式和工作目录" },
     Candidate { name: "/resume", desc: "恢复上一次对话" },
-    Candidate { name: "/sessions", desc: "选择历史对话" },
-    Candidate { name: "/search", desc: "搜索历史对话：/search 关键词" },
+    Candidate { name: "/sessions", desc: "历史对话：搜索、打开、删除" },
+    Candidate { name: "/search", desc: "带关键词打开历史对话：/search 关键词" },
     Candidate { name: "/clear", desc: "开始新对话（旧对话会保留）" },
     Candidate { name: "/thinking", desc: "查看或切换思考模式（仅本次）" },
     Candidate { name: "/config", desc: "查看或修改配置" },
     Candidate { name: "/help", desc: "显示帮助" },
     Candidate { name: "/demo", desc: "预览扫描与修复界面（示例数据）" },
-    Candidate { name: "/scan", desc: "扫描漏洞（开发中）" },
-    Candidate { name: "/fix", desc: "修复漏洞（开发中）" },
-    Candidate { name: "/report", desc: "生成报告（开发中）" },
     Candidate { name: "/exit", desc: "退出" },
 ];
 
 const REVIEW_HINT: &str = "↑↓ 选择 · Enter 确认 · y 应用 · n 跳过 · a 全部应用 · q 结束";
-const SESSIONS_HINT: &str = "↑↓ 选择 · Enter 恢复 · Esc 取消";
+const SESSIONS_HINT: &str = "输入过滤 · ↑↓ 选择 · Enter 打开 · Del 删除 · Esc 关闭";
+const CONFIRM_HINT: &str = "↑↓ 选择 · Enter 确认 · y 应用 · n 跳过 · a 本次全部应用 · Esc 跳过";
 
 /// 按键处理后，主循环需要执行的动作
 #[derive(Debug, PartialEq, Eq)]
@@ -45,9 +48,40 @@ pub enum Action {
     /// 模型表单点了保存：设置已通过格式检查。写入配置文件由调用方完成，
     /// 成功后调用 `close_form`；写入失败时表单保持打开，改动不会丢
     SaveModel(ModelSettings),
-    /// 对话选择器确认：要恢复的对话编号
+    /// 历史对话面板确认：要恢复的对话编号
     ResumeSession(String),
+    /// 历史对话面板里按了两次 Del：要删掉的对话编号
+    DeleteSession(String),
+    /// 逐条确认模式下，用户对一处改动的答复
+    Answer(Answer),
+    /// Ctrl-T：换一套配色
+    CycleTheme,
 }
+
+/// 逐条确认模式下的答复
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    /// 写入这一处
+    Apply,
+    /// 不写入，继续下一个
+    Skip,
+    /// 本次请求里剩下的改动不再逐条询问
+    Always,
+}
+
+impl Answer {
+    /// 是否同意写入
+    pub fn approved(self) -> bool {
+        !matches!(self, Answer::Skip)
+    }
+}
+
+/// 逐条确认的选项，顺序与 `Answer` 对应
+const CONFIRM_OPTIONS: [(&str, &str, Answer); 3] = [
+    ("应用", "写入这个改动", Answer::Apply),
+    ("跳过", "不写入，继续下一个", Answer::Skip),
+    ("本次全部应用", "这次请求里剩下的改动不再询问", Answer::Always),
+];
 
 /// 逐条确认的选项，顺序与 `Decision` 对应
 const REVIEW_OPTIONS: [(&str, &str, Decision); 4] = [
@@ -62,35 +96,11 @@ pub struct ReviewState {
     selected: usize,
 }
 
-/// 对话选择器里的一项
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionItem {
-    pub id: String,
-    /// 左列：相对时间
-    pub when: String,
-    /// 右列：标题与说明
-    pub text: String,
-}
-
-/// 弹出的对话选择器（`/sessions` 和 `/search` 共用）
-struct SessionPicker {
-    title: String,
-    items: Vec<SessionItem>,
+/// 逐条确认模式下，一处等着答复的文件改动。
+/// 改动内容本身已经作为 `Entry::Diff` 写进对话区，这里只记路径和菜单选中项。
+struct Confirm {
+    path: String,
     selected: usize,
-}
-
-impl SessionPicker {
-    fn choice(&self) -> Choice {
-        Choice {
-            title: format!("{} ({}/{})", self.title, self.selected + 1, self.items.len()),
-            items: self
-                .items
-                .iter()
-                .map(|i| (i.when.clone(), i.text.clone()))
-                .collect(),
-            selected: self.selected,
-        }
-    }
 }
 
 pub struct AppState {
@@ -102,9 +112,14 @@ pub struct AppState {
     pub busy: Option<String>,
     pub tick: usize,
     interrupted: bool,
-    picker: Option<SessionPicker>,
+    /// 历史对话面板；打开时键盘和粘贴都归它
+    pub sessions: Option<SessionsPanel>,
     /// `/model` 表单；打开时键盘输入都交给它
     form: Option<ModelForm>,
+    /// 当前工作模式，决定 AI 能不能改文件、改之前要不要问
+    pub mode: Mode,
+    /// 逐条确认模式下等待答复的改动
+    confirm: Option<Confirm>,
 }
 
 impl AppState {
@@ -117,15 +132,68 @@ impl AppState {
             busy: None,
             tick: 0,
             interrupted: false,
-            picker: None,
+            sessions: None,
             form: None,
+            mode: Mode::default(),
+            confirm: None,
+        }
+    }
+
+    // ---- 工作模式 ----
+
+    /// 切换模式并写进对话区。已经是这个模式就什么都不做。
+    pub fn set_mode(&mut self, mode: Mode) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        self.push(Entry::Info(format!(
+            "已切换到「{}」模式：{}",
+            mode.title(),
+            mode.describe()
+        )));
+    }
+
+    /// 逐条确认：先把改动写进对话区，再弹出三选一。
+    /// 后台任务正停在这里等答复，所以不能静默丢弃。
+    pub fn ask_confirm(&mut self, path: String, old_code: String, new_code: String) {
+        self.push(Entry::Diff {
+            path: path.clone(),
+            old: old_code,
+            new: new_code,
+        });
+        self.confirm = Some(Confirm { path, selected: 0 });
+    }
+
+    /// 有没有改动在等用户点头
+    pub fn is_confirming(&self) -> bool {
+        self.confirm.is_some()
+    }
+
+    /// 关掉确认卡片。写入结果由后台任务回报，这里不猜。
+    pub fn close_confirm(&mut self, answer: Answer) {
+        let Some(state) = self.confirm.take() else {
+            return;
+        };
+        if answer == Answer::Skip {
+            self.push(Entry::Info(format!("已跳过 {}", state.path)));
         }
     }
 
     // ---- 选择区 ----
 
-    /// 当前应显示的选择区：确认流程优先，其次是对话选择器、模型表单和斜杠命令菜单
+    /// 当前应显示的选择区：逐条确认优先，其次是修复确认、对话选择器、模型表单和斜杠命令菜单
     pub fn choice(&self) -> Option<Choice> {
+        if let Some(c) = &self.confirm {
+            return Some(Choice {
+                title: format!("应用对 {} 的改动？", c.path),
+                items: CONFIRM_OPTIONS
+                    .iter()
+                    .map(|&(n, d, _)| (n.to_string(), d.to_string()))
+                    .collect(),
+                selected: c.selected,
+            });
+        }
         if let Some(r) = &self.review {
             return Some(Choice {
                 title: "应用这个修复？".into(),
@@ -135,9 +203,6 @@ impl AppState {
                     .collect(),
                 selected: r.selected,
             });
-        }
-        if let Some(p) = &self.picker {
-            return Some(p.choice());
         }
         if let Some(f) = &self.form {
             return Some(f.choice());
@@ -173,7 +238,7 @@ impl AppState {
 
     /// 输入框当前能不能输入：确认、选择器打开时，或表单停在没有文本的行上时不能
     pub fn input_active(&self) -> bool {
-        if self.review.is_some() || self.picker.is_some() {
+        if self.confirm.is_some() || self.review.is_some() || self.sessions.is_some() {
             return false;
         }
         match &self.form {
@@ -266,11 +331,28 @@ impl AppState {
             _ => {}
         }
 
+        // 切换模式：Ctrl-P，或者 Shift-Tab（终端把它报成 BackTab）。
+        // 弹出层开着时不响应——正在确认的时候换模式只会让人更糊涂。
+        let chord = (ctrl && key.code == KeyCode::Char('p'))
+            || matches!(key.code, KeyCode::BackTab)
+            || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT));
+        if chord && self.no_overlay() {
+            self.set_mode(self.mode.next());
+            return Action::None;
+        }
+        // Ctrl-T 换配色。主题存在配置里，所以交给调用方改，这里只表达意图
+        if ctrl && key.code == KeyCode::Char('t') && self.no_overlay() {
+            return Action::CycleTheme;
+        }
+
+        if self.confirm.is_some() {
+            return self.on_confirm_key(key);
+        }
         if self.review.is_some() {
             return self.on_review_key(key);
         }
-        if self.picker.is_some() {
-            return self.on_picker_key(key);
+        if self.sessions.is_some() {
+            return self.on_sessions_key(key);
         }
         if self.form.is_some() {
             return self.on_form_key(key);
@@ -318,6 +400,37 @@ impl AppState {
         }
     }
 
+    /// 有没有弹出层占着键盘
+    fn no_overlay(&self) -> bool {
+        self.confirm.is_none()
+            && self.review.is_none()
+            && self.sessions.is_none()
+            && self.form.is_none()
+    }
+
+    fn on_confirm_key(&mut self, key: KeyEvent) -> Action {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(c) = &mut self.confirm else {
+            return Action::None;
+        };
+        let n = CONFIRM_OPTIONS.len();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => c.selected = (c.selected + n - 1) % n,
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                c.selected = (c.selected + 1) % n
+            }
+            KeyCode::Char('y') => return Action::Answer(Answer::Apply),
+            KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
+                return Action::Answer(Answer::Skip)
+            }
+            KeyCode::Char('a') => return Action::Answer(Answer::Always),
+            KeyCode::Char('c') if ctrl => return Action::Answer(Answer::Skip),
+            KeyCode::Enter => return Action::Answer(CONFIRM_OPTIONS[c.selected].2),
+            _ => {}
+        }
+        Action::None
+    }
+
     fn on_review_key(&mut self, key: KeyEvent) -> Action {
         let Some(state) = &mut self.review else {
             return Action::None;
@@ -344,41 +457,44 @@ impl AppState {
         Action::None
     }
 
-    // ---- 对话选择器 ----
+    // ---- 历史对话面板 ----
 
-    /// 打开对话选择器。列表为空时不打开。
-    pub fn open_sessions(&mut self, title: &str, items: Vec<SessionItem>) {
-        if items.is_empty() {
-            return;
-        }
-        self.picker = Some(SessionPicker {
-            title: title.to_string(),
-            items,
-            selected: 0,
-        });
+    /// 打开面板。列表为空时不打开，由调用方负责告诉用户「还没有历史对话」。
+    pub fn open_sessions(&mut self, items: Vec<SessionItem>, query: &str) {
+        self.sessions = SessionsPanel::with_query(items, query);
     }
 
-    fn on_picker_key(&mut self, key: KeyEvent) -> Action {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let Some(p) = self.picker.as_mut() else {
+    /// 文件已经删掉了：把这一行从面板里拿掉，面板留着继续挑
+    pub fn forget_session(&mut self, id: &str) {
+        if let Some(panel) = &mut self.sessions {
+            panel.forget(id);
+        }
+    }
+
+    /// 删除失败之类的事情写在面板页脚，别把整块对话顶上去
+    pub fn sessions_notice(&mut self, text: impl Into<String>, error: bool) {
+        if let Some(panel) = &mut self.sessions {
+            panel.set_notice(text, error);
+        }
+    }
+
+    fn on_sessions_key(&mut self, key: KeyEvent) -> Action {
+        let Some(panel) = &mut self.sessions else {
             return Action::None;
         };
-        let len = p.items.len();
-        match key.code {
-            KeyCode::Up => p.selected = (p.selected + len - 1) % len,
-            KeyCode::Down | KeyCode::Tab => p.selected = (p.selected + 1) % len,
-            KeyCode::Home => p.selected = 0,
-            KeyCode::End => p.selected = len - 1,
-            KeyCode::Enter => {
-                let id = p.items[p.selected].id.clone();
-                self.picker = None;
-                return Action::ResumeSession(id);
+        match panel.on_key(key) {
+            PanelEvent::None => Action::None,
+            PanelEvent::Close => {
+                self.sessions = None;
+                Action::None
             }
-            KeyCode::Esc | KeyCode::Char('q') => self.picker = None,
-            KeyCode::Char('c') if ctrl => self.picker = None,
-            _ => {}
+            PanelEvent::Resume(id) => {
+                self.sessions = None;
+                Action::ResumeSession(id)
+            }
+            // 面板不自己动磁盘：这里只表达意图，删成功之后调用 forget_session
+            PanelEvent::Delete(id) => Action::DeleteSession(id),
         }
-        Action::None
     }
 
     // ---- 模型表单 ----
@@ -415,7 +531,12 @@ impl AppState {
 
     /// 粘贴：确认和选择器打开时忽略；表单打开时进当前文本项，否则进输入框
     pub fn on_paste(&mut self, text: &str) {
-        if self.review.is_some() || self.picker.is_some() {
+        if self.confirm.is_some() || self.review.is_some() {
+            return;
+        }
+        // 面板开着时粘贴进搜索框，比直接丢掉更符合直觉
+        if let Some(panel) = &mut self.sessions {
+            panel.paste(text);
             return;
         }
         match self.form.as_mut() {
@@ -426,10 +547,13 @@ impl AppState {
 
     /// 当前模式专属的快捷键提示；没有则用默认提示
     pub fn hint(&self) -> Option<&'static str> {
+        if self.confirm.is_some() {
+            return Some(CONFIRM_HINT);
+        }
         if self.review.is_some() {
             return Some(REVIEW_HINT);
         }
-        if self.picker.is_some() {
+        if self.sessions.is_some() {
             return Some(SESSIONS_HINT);
         }
         self.form.as_ref().map(ModelForm::hint)
@@ -455,6 +579,8 @@ impl AppState {
 
     pub fn end_request(&mut self) {
         self.busy = None;
+        // 请求结束了，没有后台任务还在等这个答复
+        self.confirm = None;
     }
 
     pub fn on_tick(&mut self) {
@@ -507,12 +633,25 @@ mod tests {
     }
 
     fn session_items() -> Vec<SessionItem> {
-        let item = |id: &str| SessionItem {
-            id: id.into(),
-            when: "刚刚".into(),
-            text: format!("对话 {id}"),
+        let item = |id: &str, title: &str, body: &str| {
+            SessionItem::from_catalog(
+                crate::sessions::CatalogEntry {
+                    summary: crate::sessions::Summary {
+                        id: id.into(),
+                        title: title.into(),
+                        updated: 0,
+                        turns: 1,
+                        model: "deepseek-flash".into(),
+                    },
+                    body: body.into(),
+                },
+                "刚刚".into(),
+            )
         };
-        vec![item("s1"), item("s2")]
+        vec![
+            item("s1", "如何防止 SQL 注入", "用参数化查询"),
+            item("s2", "聊聊天气", "今天不错"),
+        ]
     }
 
     #[test]
@@ -694,40 +833,76 @@ mod tests {
     }
 
     #[test]
-    fn empty_session_list_does_not_open_a_picker() {
+    fn an_empty_session_list_does_not_open_the_panel() {
         let mut app = AppState::new();
-        app.open_sessions("t", Vec::new());
-        assert!(app.choice().is_none());
+        app.open_sessions(Vec::new(), "");
+        assert!(app.sessions.is_none());
+        assert!(app.choice().is_none(), "面板不是选择区，不该占用下面的空间");
     }
 
     #[test]
-    fn session_picker_navigates_wraps_and_resumes_the_selected_one() {
+    fn the_panel_takes_the_keyboard_and_enter_resumes_the_highlighted_session() {
         let mut app = AppState::new();
-        app.open_sessions("选择对话", session_items());
-        let c = app.choice().unwrap();
-        assert_eq!(c.title, "选择对话 (1/2)");
-        assert_eq!(c.items[0], ("刚刚".to_string(), "对话 s1".to_string()));
-        app.on_key(key(KeyCode::Right)); // 左右键在这里没有用
-        app.on_key(key(KeyCode::Char('k')));
-        assert_eq!(app.choice().unwrap().selected, 0);
-        app.on_key(key(KeyCode::Up)); // 绕到最后一项
-        assert_eq!(app.choice().unwrap().selected, 1);
+        app.open_sessions(session_items(), "");
+        assert!(app.sessions.is_some());
         assert_eq!(app.hint(), Some(SESSIONS_HINT));
+        assert!(!app.input_active(), "底部输入框让位给面板");
+
+        app.on_key(key(KeyCode::Down));
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
             Action::ResumeSession("s2".into())
         );
-        assert!(app.choice().is_none(), "the picker closes after choosing");
+        assert!(app.sessions.is_none(), "选中之后面板自己关掉");
     }
 
     #[test]
-    fn esc_closes_the_session_picker_and_typing_is_ignored_meanwhile() {
+    fn typing_in_the_panel_filters_instead_of_reaching_the_input_box() {
         let mut app = AppState::new();
-        app.open_sessions("选择对话", session_items());
-        type_str(&mut app, "zzz");
-        assert!(app.editor.is_empty());
+        app.open_sessions(session_items(), "");
+        type_str(&mut app, "天气");
+        assert!(app.editor.is_empty(), "不会打到下面的输入框里");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::ResumeSession("s2".into())
+        );
+    }
+
+    #[test]
+    fn esc_closes_the_panel_without_touching_the_input_box() {
+        let mut app = AppState::new();
+        app.open_sessions(session_items(), "");
         assert_eq!(app.on_key(key(KeyCode::Esc)), Action::None);
-        assert!(app.choice().is_none());
+        assert!(app.sessions.is_none());
+        assert!(app.editor.is_empty());
+    }
+
+    #[test]
+    fn deleting_a_session_takes_two_presses_and_leaves_the_panel_open() {
+        let mut app = AppState::new();
+        app.open_sessions(session_items(), "");
+        assert_eq!(app.on_key(key(KeyCode::Delete)), Action::None, "第一次只是问一句");
+        assert_eq!(
+            app.on_key(key(KeyCode::Delete)),
+            Action::DeleteSession("s1".into())
+        );
+        assert!(app.sessions.is_some(), "文件删掉之前面板不能关");
+        // 调用方删成功后告诉面板，这一行就没了
+        app.forget_session("s1");
+        assert!(app.sessions.is_some());
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::ResumeSession("s2".into())
+        );
+    }
+
+    #[test]
+    fn the_mode_chord_is_ignored_while_the_panel_is_open() {
+        let mut app = AppState::new();
+        app.open_sessions(session_items(), "");
+        app.on_key(ctrl('p'));
+        assert_eq!(app.mode, Mode::Plan);
+        assert!(app.sessions.is_some());
     }
 
     #[test]
@@ -830,9 +1005,13 @@ mod tests {
         assert_eq!(app.choice().unwrap().items[1].1, "sk-pasted");
 
         let mut app = AppState::new();
-        app.open_sessions("t", session_items());
-        app.on_paste("ignored");
-        assert!(app.editor.is_empty());
+        app.open_sessions(session_items(), "");
+        app.on_paste("天气");
+        assert!(app.editor.is_empty(), "粘贴进的是搜索框");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::ResumeSession("s2".into())
+        );
 
         let mut app = AppState::new();
         start_demo(&mut app);
@@ -848,7 +1027,7 @@ mod tests {
         assert!(!app.input_active());
 
         let mut app = AppState::new();
-        app.open_sessions("t", session_items());
+        app.open_sessions(session_items(), "");
         assert!(!app.input_active());
     }
 
@@ -858,5 +1037,120 @@ mod tests {
         app.start_review(&[], &[]);
         assert!(app.review.is_none());
         assert!(texts(&app).contains("没有可确认的修复"));
+    }
+
+    // ---- 工作模式 ----
+
+    #[test]
+    fn the_mode_chord_cycles_plan_confirm_auto() {
+        let mut app = AppState::new();
+        assert_eq!(app.mode, Mode::Plan, "默认先看不动");
+
+        app.on_key(key(KeyCode::BackTab)); // Shift-Tab
+        assert_eq!(app.mode, Mode::Confirm);
+        app.on_key(ctrl('p'));
+        assert_eq!(app.mode, Mode::Auto);
+        app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+        assert_eq!(app.mode, Mode::Plan, "绕回第一档");
+        assert!(texts(&app).contains("已切换到「计划」模式"));
+    }
+
+    #[test]
+    fn plain_tab_still_completes_a_command_instead_of_switching_modes() {
+        let mut app = AppState::new();
+        type_str(&mut app, "/he");
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.editor.text(), "/help ");
+        assert_eq!(app.mode, Mode::Plan);
+    }
+
+    #[test]
+    fn the_mode_chord_is_ignored_while_an_overlay_is_open() {
+        let mut app = AppState::new();
+        app.ask_confirm("a.rs".into(), String::new(), "x".into());
+        app.on_key(ctrl('p'));
+        assert_eq!(app.mode, Mode::Plan, "确认的时候换模式只会更糊涂");
+        assert!(app.choice().is_some(), "确认卡片不该被抢走");
+    }
+
+    #[test]
+    fn setting_the_same_mode_twice_says_nothing() {
+        let mut app = AppState::new();
+        app.set_mode(Mode::Plan);
+        assert!(!texts(&app).contains("已切换"));
+        app.set_mode(Mode::Auto);
+        assert!(texts(&app).contains("已切换到「全自动」模式"));
+    }
+
+    #[test]
+    fn the_dev_commands_are_gone_and_mode_took_their_place() {
+        let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
+        for gone in ["/scan", "/fix", "/report"] {
+            assert!(!names.contains(&gone), "{gone} 应当已经删掉");
+        }
+        assert!(names.contains(&"/mode"));
+    }
+
+    // ---- 逐条确认 ----
+
+    #[test]
+    fn confirm_card_asks_about_the_file_and_takes_shortcuts() {
+        let mut app = AppState::new();
+        app.ask_confirm("src/db.py".into(), "a\n".into(), "b\n".into());
+
+        let c = app.choice().unwrap();
+        assert_eq!(c.title, "应用对 src/db.py 的改动？");
+        assert_eq!(c.items.len(), 3);
+        assert_eq!(c.items[0].0, "应用");
+        assert!(!app.input_active());
+        assert_eq!(app.hint(), Some(CONFIRM_HINT));
+        // 改动本身已经摊在对话区里，不用再点开才知道改了什么
+        assert!(texts(&app).contains("src/db.py"));
+
+        assert_eq!(app.on_key(key(KeyCode::Char('y'))), Action::Answer(Answer::Apply));
+        assert_eq!(app.on_key(key(KeyCode::Char('n'))), Action::Answer(Answer::Skip));
+        assert_eq!(app.on_key(key(KeyCode::Char('a'))), Action::Answer(Answer::Always));
+        assert_eq!(app.on_key(key(KeyCode::Esc)), Action::Answer(Answer::Skip));
+    }
+
+    #[test]
+    fn confirm_menu_navigation_wraps_and_enter_uses_the_selection() {
+        let mut app = AppState::new();
+        app.ask_confirm("a.rs".into(), String::new(), "x".into());
+        app.on_key(key(KeyCode::Up)); // 从第一项绕到最后一项
+        assert_eq!(app.choice().unwrap().selected, 2);
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::Answer(Answer::Always)
+        );
+    }
+
+    #[test]
+    fn skipping_a_change_leaves_a_note_and_closes_the_card() {
+        let mut app = AppState::new();
+        app.ask_confirm("a.rs".into(), "x\n".into(), "y\n".into());
+        app.close_confirm(Answer::Skip);
+        assert!(app.choice().is_none());
+        assert!(app.input_active());
+        assert!(texts(&app).contains("已跳过 a.rs"));
+    }
+
+    #[test]
+    fn typing_is_ignored_while_confirming() {
+        let mut app = AppState::new();
+        app.ask_confirm("a.rs".into(), String::new(), "x".into());
+        type_str(&mut app, "xyz");
+        assert!(app.editor.is_empty());
+        app.on_paste("pasted");
+        assert!(app.editor.is_empty());
+    }
+
+    #[test]
+    fn finishing_the_request_closes_a_stale_confirm_card() {
+        let mut app = AppState::new();
+        app.begin_request("hi");
+        app.ask_confirm("a.rs".into(), String::new(), "x".into());
+        app.end_request();
+        assert!(app.choice().is_none(), "任务结束了，没人再等这个答复");
     }
 }

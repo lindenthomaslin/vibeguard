@@ -11,6 +11,7 @@ use crossterm::style::Print;
 use crossterm::terminal::{self, Clear, ClearType};
 use crossterm::{execute, queue};
 use std::io::{self, BufRead, IsTerminal, Write};
+use std::time::Duration;
 
 /// 进入原始模式并开启括号粘贴；离开作用域（含出错、panic）时自动还原
 struct RawMode;
@@ -47,35 +48,42 @@ impl Painter {
         }
         self.last_frame = Some(f.clone());
 
-        let mut out = io::stdout().lock();
+        // 先写进内存缓冲，再一次性写出。stdout 是行缓冲的，
+        // 逐行写会让每个 "\r\n" 触发一次系统调用，造成闪烁和延迟。
+        let mut buf: Vec<u8> = Vec::with_capacity(1024);
         if self.cursor_row > 0 {
-            queue!(out, MoveUp(self.cursor_row as u16))?;
+            queue!(buf, MoveUp(self.cursor_row as u16))?;
         }
-        queue!(out, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
+        queue!(buf, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
         for (i, line) in f.lines.iter().enumerate() {
             if i > 0 {
-                queue!(out, Print("\r\n"))?;
+                queue!(buf, Print("\r\n"))?;
             }
-            queue!(out, Print(line))?;
+            queue!(buf, Print(line))?;
         }
         let last = f.lines.len() - 1;
         if last > f.cursor.0 {
-            queue!(out, MoveUp((last - f.cursor.0) as u16))?;
+            queue!(buf, MoveUp((last - f.cursor.0) as u16))?;
         }
-        queue!(out, MoveToColumn(f.cursor.1 as u16))?;
+        queue!(buf, MoveToColumn(f.cursor.1 as u16))?;
         self.cursor_row = f.cursor.0;
+
+        let mut out = io::stdout().lock();
+        out.write_all(&buf)?;
         out.flush()
     }
 
     /// 画最后一帧，并把光标移到框下方，后续输出接在它后面
     fn finish(&mut self, f: &Frame) -> io::Result<()> {
         self.draw(f)?;
-        let mut out = io::stdout().lock();
+        let mut buf: Vec<u8> = Vec::new();
         let last = f.lines.len() - 1;
         if last > f.cursor.0 {
-            queue!(out, MoveDown((last - f.cursor.0) as u16))?;
+            queue!(buf, MoveDown((last - f.cursor.0) as u16))?;
         }
-        queue!(out, Print("\r\n"))?;
+        queue!(buf, Print("\r\n"))?;
+        let mut out = io::stdout().lock();
+        out.write_all(&buf)?;
         out.flush()
     }
 }
@@ -88,32 +96,35 @@ pub fn read_input(ed: &mut Editor) -> Result<Outcome> {
 
     let _raw = RawMode::enter()?;
     let mut painter = Painter::default();
-    let width = ui::term_width();
+    let mut width = ui::term_width();
 
     loop {
         painter.draw(&frame(ed, width, true))?;
-        match event::read()? {
-            Event::Key(key) => {
-                let outcome = handle_key(ed, key);
-                if outcome == Outcome::Continue {
-                    continue;
+
+        // 阻塞等第一个事件，然后把已排队的事件一次处理完再重绘，
+        // 这样输入法一次提交多个字、快速连打时只画一帧，不会越积越慢。
+        let mut ev = event::read()?;
+        loop {
+            match ev {
+                Event::Key(key) => {
+                    let outcome = handle_key(ed, key);
+                    if outcome != Outcome::Continue {
+                        let mut shown = Editor::new(&[]);
+                        if let Outcome::Submit(text) = &outcome {
+                            shown.insert_str(text);
+                        }
+                        painter.finish(&frame(&shown, width, false))?;
+                        return Ok(outcome);
+                    }
                 }
-                let mut shown = Editor::new(&[]);
-                if let Outcome::Submit(text) = &outcome {
-                    shown.insert_str(text);
-                }
-                painter.finish(&frame(&shown, width, false))?;
-                return Ok(outcome);
+                Event::Paste(text) => ed.insert_str(&text),
+                Event::Resize(_, _) => width = ui::term_width(),
+                _ => {}
             }
-            Event::Paste(text) => ed.insert_str(&text),
-            Event::Resize(_, _) => {
-                // 终端宽度改变，重新缓存
-                let new_width = ui::term_width();
-                if new_width != width {
-                    painter.last_frame = None;
-                }
+            if !event::poll(Duration::ZERO)? {
+                break;
             }
-            _ => {}
+            ev = event::read()?;
         }
     }
 }

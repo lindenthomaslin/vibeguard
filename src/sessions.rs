@@ -12,6 +12,11 @@ use std::path::{Path, PathBuf};
 const TITLE_CHARS: usize = 60;
 const SNIPPET_BEFORE: usize = 20;
 const SNIPPET_AFTER: usize = 50;
+/// 选择面板里能搜到的正文长度上限（每个对话）。更长的尾巴只能靠标题找。
+const BODY_CHARS: usize = 20_000;
+/// 所有对话正文加起来的上限：超出之后更早的对话只按标题匹配，
+/// 免得几百个长对话把内存吃光。
+const BODY_BUDGET: usize = 2_000_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Conversation {
@@ -35,24 +40,12 @@ pub struct Summary {
     pub model: String,
 }
 
-/// 一个对话里的搜索结果：第一处命中的片段，以及命中的消息条数
+/// 选择面板用的一行：摘要 + 正文开头一段，打开面板时一次性读进内存
 #[derive(Debug, Clone, PartialEq)]
-pub struct Hit {
+pub struct CatalogEntry {
     pub summary: Summary,
-    pub role: Role,
-    pub snippet: String,
-    pub matches: usize,
-}
-
-pub struct Listing {
-    pub items: Vec<Summary>,
-    /// 读不出来的文件数（损坏或格式不对），不会被删除
-    pub skipped: usize,
-}
-
-pub struct SearchResult {
-    pub hits: Vec<Hit>,
-    pub skipped: usize,
+    /// 所有消息正文的开头一段；超出全局预算的对话这里是空的（只按标题匹配）
+    pub body: String,
 }
 
 impl Conversation {
@@ -223,23 +216,17 @@ impl Store {
         Ok((all, skipped))
     }
 
-    /// 全部对话，最近更新的在前；还没有任何消息的对话不列出
-    pub fn list(&self) -> Result<Listing> {
-        let (all, skipped) = self.read_all()?;
-        let mut items: Vec<Summary> = all
-            .iter()
-            .filter(|c| !c.messages.is_empty())
-            .map(Conversation::summary)
-            .collect();
-        items.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| b.id.cmp(&a.id)));
-        Ok(Listing { items, skipped })
+    /// 全部对话，最近更新的在前；还没有任何消息的对话不列出。
+    /// 只要摘要：启动时就要调，别顺手把正文也读进内存（那是 `catalog` 的事）。
+    pub fn list(&self) -> Result<Vec<Summary>> {
+        let (all, _) = self.read_all()?;
+        Ok(summaries(&all))
     }
 
     /// 最近更新的对话，可以排除当前这一个
     pub fn latest(&self, exclude: Option<&str>) -> Result<Option<Conversation>> {
-        let listing = self.list()?;
-        match listing
-            .items
+        match self
+            .list()?
             .into_iter()
             .find(|s| Some(s.id.as_str()) != exclude)
         {
@@ -248,53 +235,84 @@ impl Store {
         }
     }
 
-    /// 在所有对话的消息里搜索（不区分大小写），每个对话一条结果，最近更新的在前
-    pub fn search(&self, query: &str) -> Result<SearchResult> {
-        let query = query.trim();
-        if query.is_empty() {
-            bail!("搜索关键词不能为空");
-        }
-        let needle = fold(query);
+    /// 列表 + 正文开头，供选择面板在内存里即时过滤。
+    /// 只读一遍磁盘；正文按 `BODY_CHARS` 和 `BODY_BUDGET` 截断。
+    pub fn catalog(&self) -> Result<(Vec<CatalogEntry>, usize)> {
         let (all, skipped) = self.read_all()?;
-        let mut hits: Vec<Hit> = all
-            .iter()
-            .filter_map(|c| {
-                let mut first = None;
-                let mut matches = 0;
-                for m in &c.messages {
-                    if let Some(at) = find_folded(&fold(&m.content), &needle) {
-                        matches += 1;
-                        first.get_or_insert_with(|| {
-                            (m.role, snippet(&m.content, at, needle.len()))
-                        });
-                    }
-                }
-                first.map(|(role, snippet)| Hit {
-                    summary: c.summary(),
-                    role,
-                    snippet,
-                    matches,
-                })
+        let mut ordered: Vec<&Conversation> =
+            all.iter().filter(|c| !c.messages.is_empty()).collect();
+        ordered.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| b.id.cmp(&a.id)));
+
+        let mut budget = BODY_BUDGET;
+        let entries = ordered
+            .into_iter()
+            .map(|c| CatalogEntry {
+                summary: c.summary(),
+                body: body_of(c, &mut budget),
             })
             .collect();
-        hits.sort_by(|a, b| {
-            b.summary
-                .updated
-                .cmp(&a.summary.updated)
-                .then_with(|| b.summary.id.cmp(&a.summary.id))
-        });
-        Ok(SearchResult { hits, skipped })
+        Ok((entries, skipped))
+    }
+
+    /// 删掉一个对话。找不到时报错，让界面能说清楚是没删还是删错了。
+    pub fn delete(&self, id: &str) -> Result<()> {
+        if !valid_id(id) {
+            bail!("非法的对话编号：{id}");
+        }
+        let path = self.file(id);
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                bail!("对话已经不存在：{}", path.display())
+            }
+            Err(e) => Err(e).with_context(|| format!("删除对话失败：{}", path.display())),
+        }
     }
 }
 
+/// 摘要列表，最近更新的在前
+fn summaries(all: &[Conversation]) -> Vec<Summary> {
+    let mut items: Vec<Summary> = all
+        .iter()
+        .filter(|c| !c.messages.is_empty())
+        .map(Conversation::summary)
+        .collect();
+    items.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| b.id.cmp(&a.id)));
+    items
+}
+
+/// 取对话正文的开头一段，并从预算里扣掉。预算用完就返回空串。
+fn body_of(c: &Conversation, budget: &mut usize) -> String {
+    let cap = BODY_CHARS.min(*budget);
+    if cap == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    for (i, m) in c.messages.iter().enumerate() {
+        if out.chars().count() >= cap {
+            break;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        // 第一句已经变成标题了，跳过标题长度那一段：
+        // 否则搜到标题里的词时，摘要只是把标题又念了一遍
+        let skip = if i == 0 { TITLE_CHARS } else { 0 };
+        out.extend(m.content.chars().skip(skip).take(cap));
+    }
+    let out: String = out.chars().take(cap).collect();
+    *budget -= out.chars().count();
+    out
+}
+
 /// 逐字符转小写，保证字符数不变，命中下标可以直接用在原文上
-fn fold(s: &str) -> Vec<char> {
+pub(crate) fn fold(s: &str) -> Vec<char> {
     s.chars()
         .map(|c| c.to_lowercase().next().unwrap_or(c))
         .collect()
 }
 
-fn find_folded(hay: &[char], needle: &[char]) -> Option<usize> {
+pub(crate) fn find_folded(hay: &[char], needle: &[char]) -> Option<usize> {
     if needle.is_empty() || needle.len() > hay.len() {
         return None;
     }
@@ -302,7 +320,7 @@ fn find_folded(hay: &[char], needle: &[char]) -> Option<usize> {
 }
 
 /// 命中处前后各取一段，换行压成空格，被截断的一侧加省略号
-fn snippet(text: &str, at: usize, len: usize) -> String {
+pub(crate) fn snippet(text: &str, at: usize, len: usize) -> String {
     let chars: Vec<char> = text.chars().collect();
     let start = at.saturating_sub(SNIPPET_BEFORE);
     let end = (at + len + SNIPPET_AFTER).min(chars.len());
@@ -438,11 +456,11 @@ mod tests {
         fs::write(store.dir().join("notes.txt"), "hi").unwrap();
 
         let listing = store.list().unwrap();
-        let ids: Vec<_> = listing.items.iter().map(|s| s.id.as_str()).collect();
+        let ids: Vec<_> = listing.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["new", "mid", "old"]);
-        assert_eq!(listing.skipped, 1);
-        assert_eq!(listing.items[0].turns, 1);
-        // 坏文件原样保留
+        assert_eq!(listing[0].turns, 1);
+        // 坏文件算「跳过」，但原样保留
+        assert_eq!(store.catalog().unwrap().1, 1);
         assert!(store.dir().join("bad.json").exists());
     }
 
@@ -450,10 +468,9 @@ mod tests {
     fn missing_directory_means_no_conversations() {
         let (_dir, store) = store();
         let listing = store.list().unwrap();
-        assert!(listing.items.is_empty());
-        assert_eq!(listing.skipped, 0);
+        assert!(listing.is_empty());
         assert!(store.latest(None).unwrap().is_none());
-        assert!(store.search("x").unwrap().hits.is_empty());
+        assert!(store.catalog().unwrap().0.is_empty());
     }
 
     #[test]
@@ -472,30 +489,78 @@ mod tests {
     }
 
     #[test]
-    fn search_is_case_insensitive_cjk_aware_and_one_hit_per_conversation() {
+    fn catalog_carries_the_body_so_the_panel_can_filter_in_memory() {
         let (_dir, store) = store();
-        let mut a = conv("a", 100, "如何防止 SQL 注入？", "使用参数化查询。sql 注入很常见。");
+        let mut a = conv("a", 100, "如何防止 SQL 注入？", "使用参数化查询。");
         a.push_exchange("还有别的吗", "没有了", 110);
         store.save(&a).unwrap();
         store.save(&conv("b", 300, "聊聊天气", "今天不错")).unwrap();
-        store.save(&conv("c", 200, "什么是 XSS", "sql 也要防")).unwrap();
+        store
+            .save(&Conversation::new("empty".into(), 999, "m"))
+            .unwrap();
 
-        let r = store.search("SQL").unwrap();
-        let ids: Vec<_> = r.hits.iter().map(|h| h.summary.id.as_str()).collect();
-        assert_eq!(ids, ["c", "a"]);
-        assert_eq!(r.hits[1].matches, 2);
-        assert_eq!(r.hits[1].role, Role::User);
-        assert!(r.hits[1].snippet.contains("SQL 注入"));
-        assert_eq!(r.hits[0].role, Role::Assistant);
-
-        assert_eq!(store.search("参数化").unwrap().hits.len(), 1);
-        assert!(store.search("不存在的词").unwrap().hits.is_empty());
+        let (entries, skipped) = store.catalog().unwrap();
+        assert_eq!(skipped, 0);
+        let ids: Vec<_> = entries.iter().map(|e| e.summary.id.as_str()).collect();
+        assert_eq!(ids, ["b", "a"], "最近更新的在前，空对话不列出");
+        assert!(entries[1].body.contains("参数化查询"));
+        assert!(entries[1].body.contains("还有别的吗"), "多轮都收进来");
+        assert!(
+            !entries[1].body.contains("如何防止 SQL 注入"),
+            "第一句已经是标题了，正文里不该再重复一遍"
+        );
+        assert_eq!(entries[1].summary.turns, 2);
     }
 
     #[test]
-    fn search_rejects_blank_queries() {
+    fn catalog_bodies_are_capped_per_conversation() {
         let (_dir, store) = store();
-        assert!(store.search("   ").is_err());
+        let huge = "长".repeat(BODY_CHARS + 500);
+        store.save(&conv("big", 100, &huge, &huge)).unwrap();
+        let (entries, _) = store.catalog().unwrap();
+        assert_eq!(entries[0].body.chars().count(), BODY_CHARS);
+    }
+
+    #[test]
+    fn catalog_stops_collecting_bodies_once_the_budget_is_gone() {
+        let (_dir, store) = store();
+        // 每个对话都顶到单条上限，凑够预算还多一个
+        let per = BODY_CHARS;
+        let count = BODY_BUDGET / per + 1;
+        let text = "x".repeat(per);
+        for i in 0..count {
+            store
+                .save(&conv(&format!("s{i:04}"), 100 + i as i64, &text, &text))
+                .unwrap();
+        }
+        let (entries, _) = store.catalog().unwrap();
+        assert_eq!(entries.len(), count);
+        assert!(!entries[0].body.is_empty(), "最新的还能搜正文");
+        assert!(entries.last().unwrap().body.is_empty(), "预算用完就不带了");
+    }
+
+    #[test]
+    fn delete_removes_only_that_conversation() {
+        let (_dir, store) = store();
+        store.save(&conv("keep", 100, "留着", "a")).unwrap();
+        store.save(&conv("gone", 200, "删掉", "a")).unwrap();
+        store.delete("gone").unwrap();
+        assert!(!store.dir().join("gone.json").exists());
+        assert!(store.dir().join("keep.json").exists());
+        assert_eq!(store.list().unwrap().len(), 1);
+        // 再删一次要报错，界面才能说清楚
+        assert!(store.delete("gone").is_err());
+    }
+
+    #[test]
+    fn delete_refuses_ids_that_could_escape_the_directory() {
+        let (_dir, store) = store();
+        let outside = store.dir().parent().unwrap().join("keep.txt");
+        fs::write(&outside, "别动我").unwrap();
+        for bad in ["../keep", "a/b", "", "..", "x\\y"] {
+            assert!(store.delete(bad).is_err(), "{bad:?}");
+        }
+        assert!(outside.exists());
     }
 
     #[test]

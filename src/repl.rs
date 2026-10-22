@@ -3,9 +3,9 @@
 use crate::app::App;
 use crate::commands;
 use crate::editor::{Candidate, Editor};
-use crate::fast_input::read_input_fast;
 use crate::input::Outcome;
 use crate::llm::{ChatOptions, LlmClient, Message};
+use crate::mode::Mode;
 use crate::prompt;
 use crate::ui;
 use anyhow::{Result, bail};
@@ -17,14 +17,12 @@ const COMMANDS: &[Candidate] = &[
     Candidate { name: "/help", desc: "显示帮助" },
     Candidate { name: "/config", desc: "查看或修改配置" },
     Candidate { name: "/model", desc: "查看或切换模型" },
+    Candidate { name: "/mode", desc: "切换工作模式：计划 / 逐条确认 / 全自动" },
     Candidate { name: "/thinking", desc: "查看或切换思考模式" },
     Candidate { name: "/theme", desc: "切换主题（dark/light）" },
     Candidate { name: "/font", desc: "切换字体风格（default/anime）" },
     Candidate { name: "/ping", desc: "测试 API 连接" },
     Candidate { name: "/clear", desc: "清空对话历史" },
-    Candidate { name: "/scan", desc: "扫描漏洞（开发中）" },
-    Candidate { name: "/fix", desc: "修复漏洞（开发中）" },
-    Candidate { name: "/report", desc: "生成报告（开发中）" },
     Candidate { name: "/exit", desc: "退出" },
 ];
 
@@ -37,6 +35,7 @@ const HELP: &[(&str, &str)] = &[
     ("/config [show|init]", "查看配置 / 运行配置向导"),
     ("/config set <key> [value]", "修改并保存配置项"),
     ("/model [name]", "查看或切换本次会话的模型"),
+    ("/mode [plan|confirm|auto]", "切换工作模式：计划 / 逐条确认 / 全自动"),
     (
         "/thinking [mode]",
         "查看或切换思考模式：auto / off / low / high / max",
@@ -45,12 +44,12 @@ const HELP: &[(&str, &str)] = &[
     ("/font [default|anime]", "切换字体风格"),
     ("/ping", "测试 API 连接"),
     ("/clear", "清空对话历史"),
-    ("/scan  /fix  /report", "扫描、修复、报告（开发中）"),
     ("/exit", "退出（也可按 Ctrl-D）"),
 ];
 
 pub async fn run(app: &mut App) -> Result<()> {
     let cfg = app.effective();
+    ui::set_theme(crate::theme::Theme::parse(&cfg.theme).unwrap_or_default());
     ui::banner(&cfg);
     if cfg.api_key.is_none() {
         ui::warn("尚未配置 API Key：输入 /config init，或设置环境变量 DEEPSEEK_API_KEY");
@@ -64,10 +63,11 @@ pub async fn run(app: &mut App) -> Result<()> {
     let mut client: Option<LlmClient> = None;
     let mut editor = Editor::new(COMMANDS);
     let mut interrupted = false;
+    let mut mode = Mode::default();
 
     loop {
         println!();
-        let input = match read_input_fast(&mut editor)? {
+        let input = match prompt::read_input(&mut editor)? {
             Outcome::Submit(text) => text,
             Outcome::Eof => break,
             Outcome::Interrupt => {
@@ -94,7 +94,7 @@ pub async fn run(app: &mut App) -> Result<()> {
                 client = None;
             }
             if let Err(e) =
-                slash_command(app, name, &parts[1.min(parts.len())..], &mut history).await
+                slash_command(app, name, &parts[1.min(parts.len())..], &mut history, &mut mode).await
             {
                 ui::error(&format!("{e:#}"));
             }
@@ -113,7 +113,8 @@ pub async fn run(app: &mut App) -> Result<()> {
         let Some(c) = client.as_ref() else { continue };
 
         let mut messages = Vec::with_capacity(history.len() + 2);
-        messages.push(Message::system(SYSTEM_PROMPT));
+        let system = format!("{SYSTEM_PROMPT}{}", mode.instruction());
+        messages.push(Message::system(&system));
         messages.extend(history.iter().cloned());
         messages.push(Message::user(input));
 
@@ -145,6 +146,7 @@ async fn slash_command(
     name: &str,
     args: &[&str],
     history: &mut Vec<Message>,
+    mode: &mut Mode,
 ) -> Result<()> {
     match name {
         "help" | "h" | "?" => {
@@ -177,6 +179,21 @@ async fn slash_command(
             }
             _ => bail!("用法：/model [name]"),
         },
+        "mode" => match args {
+            [] => ui::info(&format!(
+                "当前模式：「{}」{}",
+                mode.title(),
+                mode.describe()
+            )),
+            [name] => match Mode::parse(name) {
+                Some(next) => {
+                    *mode = next;
+                    ui::success(&format!("已切换到「{}」模式：{}", mode.title(), mode.describe()));
+                }
+                None => bail!("模式可选值为 plan / confirm / auto"),
+            },
+            _ => bail!("用法：/mode [plan|confirm|auto]"),
+        },
         "thinking" => match args {
             [] => ui::info(&format!("当前思考模式：{}", app.effective().thinking)),
             [mode] => {
@@ -192,6 +209,7 @@ async fn slash_command(
                 let theme = theme.to_lowercase();
                 if matches!(theme.as_str(), "dark" | "light") {
                     app.overrides.theme = Some(theme.clone());
+                    ui::set_theme(crate::theme::Theme::parse(&theme).unwrap_or_default());
                     ui::success(&format!("界面主题已切换为：{theme}"));
                 } else {
                     bail!("主题可选值为 dark / light");
@@ -213,7 +231,6 @@ async fn slash_command(
             _ => bail!("用法：/font [default|anime]"),
         },
         "ping" => commands::ping(app).await?,
-        "scan" | "fix" | "report" => ui::warn(&format!("/{name} 尚在开发中")),
         "" => bail!("请输入命令，/help 查看可用命令"),
         _ => bail!("未知命令 /{name}，/help 查看可用命令"),
     }

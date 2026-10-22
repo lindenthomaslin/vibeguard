@@ -2,26 +2,27 @@
 
 use crate::chat::wrap;
 use crate::finding::{Finding, Fix, Severity, counts};
+use crate::theme::Look;
 use console::truncate_str;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use similar::{ChangeTag, TextDiff};
 
-const DIM: Style = Style::new().add_modifier(Modifier::DIM);
 const BOLD: Style = Style::new().add_modifier(Modifier::BOLD);
 
-pub fn severity_style(s: Severity) -> Style {
+/// 严重级别配色：严重/高危用错误色，中危用警告色，低危用信息色
+pub fn severity_style(s: Severity, look: &Look) -> Style {
     match s {
-        Severity::Critical => Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
-        Severity::High => Style::new().fg(Color::Red),
-        Severity::Medium => Style::new().fg(Color::Yellow),
-        Severity::Low => Style::new().fg(Color::Blue),
-        Severity::Info => DIM,
+        Severity::Critical => look.error().add_modifier(Modifier::BOLD),
+        Severity::High => look.error(),
+        Severity::Medium => look.warn(),
+        Severity::Low => look.info(),
+        Severity::Info => look.muted(),
     }
 }
 
-pub fn badge(s: Severity) -> Span<'static> {
-    Span::styled(format!("[{}]", s.label()), severity_style(s))
+pub fn badge(s: Severity, look: &Look) -> Span<'static> {
+    Span::styled(format!("[{}]", s.label()), severity_style(s, look))
 }
 
 fn clip(s: &str, width: usize) -> String {
@@ -29,14 +30,20 @@ fn clip(s: &str, width: usize) -> String {
 }
 
 /// 一条发现的卡片：级别、编号、标题、位置、说明与建议
-pub fn finding_card(f: &Finding, index: usize, total: usize, width: usize) -> Vec<Line<'static>> {
+pub fn finding_card(
+    f: &Finding,
+    index: usize,
+    total: usize,
+    width: usize,
+    look: &Look,
+) -> Vec<Line<'static>> {
     let body_w = width.max(30) - 2;
     let mut out = vec![Line::from(vec![
-        Span::styled("● ", Style::new().fg(Color::Cyan)),
-        badge(f.severity),
+        Span::styled(format!("{} ", look.glyphs.info), look.accent()),
+        badge(f.severity, look),
         Span::raw(" "),
         Span::styled(f.id.clone(), BOLD),
-        Span::styled(format!("  ({index}/{total})"), DIM),
+        Span::styled(format!("  ({index}/{total})"), look.muted()),
     ])];
     out.push(Line::from(vec![
         Span::raw("  "),
@@ -48,7 +55,7 @@ pub fn finding_card(f: &Finding, index: usize, total: usize, width: usize) -> Ve
     };
     out.push(Line::from(vec![
         Span::raw("  "),
-        Span::styled(clip(&loc, body_w), DIM),
+        Span::styled(clip(&loc, body_w), look.muted()),
     ]));
     for row in wrap(&f.description, body_w) {
         if !row.is_empty() {
@@ -57,33 +64,33 @@ pub fn finding_card(f: &Finding, index: usize, total: usize, width: usize) -> Ve
     }
     if !f.suggestion.is_empty() {
         for row in wrap(&format!("建议：{}", f.suggestion), body_w) {
-            out.push(Line::styled(
-                format!("  {row}"),
-                Style::new().fg(Color::Green),
-            ));
+            out.push(Line::styled(format!("  {row}"), look.success()));
         }
     }
     out
 }
 
 /// 汇总：总数和各级别的横条
-pub fn summary_lines(findings: &[Finding]) -> Vec<Line<'static>> {
+pub fn summary_lines(findings: &[Finding], look: &Look) -> Vec<Line<'static>> {
     if findings.is_empty() {
         return vec![Line::from(vec![
-            Span::styled("✓ ", Style::new().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{} ", look.glyphs.success),
+                look.success().add_modifier(Modifier::BOLD),
+            ),
             Span::raw("未发现安全问题"),
         ])];
     }
     let c = counts(findings);
     let max = c.iter().map(|&(_, n)| n).max().unwrap_or(1).max(1);
     let mut out = vec![Line::from(vec![
-        Span::styled("● ", Style::new().fg(Color::Cyan)),
+        Span::styled(format!("{} ", look.glyphs.info), look.accent()),
         Span::raw("共发现 "),
         Span::styled(findings.len().to_string(), BOLD),
         Span::raw(" 个问题"),
     ])];
     for (sev, n) in c.into_iter().filter(|&(_, n)| n > 0) {
-        let st = severity_style(sev);
+        let st = severity_style(sev, look);
         out.push(Line::from(vec![
             Span::styled(format!("  {:<2}  ", sev.label()), st),
             Span::styled("█".repeat((n * 20).div_ceil(max)), st),
@@ -105,18 +112,18 @@ pub fn diff_stats(old: &str, new: &str) -> (usize, usize) {
 }
 
 /// 带行号的 diff，只显示改动及其前后 `context` 行
-pub fn diff_lines(fix: &Fix, context: usize, width: usize) -> Vec<Line<'static>> {
+pub fn diff_lines(fix: &Fix, context: usize, width: usize, look: &Look) -> Vec<Line<'static>> {
     let (added, removed) = diff_stats(&fix.old, &fix.new);
     let mut out = vec![Line::from(vec![
-        Span::styled("── ", DIM),
+        Span::styled("── ", look.muted()),
         Span::styled(fix.file.clone(), BOLD),
         Span::raw("  "),
-        Span::styled(format!("+{added}"), Style::new().fg(Color::Green)),
+        Span::styled(format!("+{added}"), look.success()),
         Span::raw(" "),
-        Span::styled(format!("-{removed}"), Style::new().fg(Color::Red)),
+        Span::styled(format!("-{removed}"), look.error()),
     ])];
     if added == 0 && removed == 0 {
-        out.push(Line::styled("  （无改动）", DIM));
+        out.push(Line::styled("  （无改动）", look.muted()));
         return out;
     }
 
@@ -126,25 +133,25 @@ pub fn diff_lines(fix: &Fix, context: usize, width: usize) -> Vec<Line<'static>>
     let diff = TextDiff::from_lines(&fix.old, &fix.new);
     for (gi, group) in diff.grouped_ops(context).iter().enumerate() {
         if gi > 0 {
-            out.push(Line::styled("     ⋯", DIM));
+            out.push(Line::styled("     ⋯", look.muted()));
         }
         for op in group {
             for change in diff.iter_changes(op) {
                 let (sign, style) = match change.tag() {
-                    ChangeTag::Delete => ('-', Style::new().fg(Color::Red)),
-                    ChangeTag::Insert => ('+', Style::new().fg(Color::Green)),
-                    ChangeTag::Equal => (' ', DIM),
+                    ChangeTag::Delete => ('-', look.error()),
+                    ChangeTag::Insert => ('+', look.success()),
+                    ChangeTag::Equal => (' ', look.muted()),
                 };
                 let value = change
                     .value()
                     .trim_end_matches(['\n', '\r'])
                     .replace('\t', "    ");
                 out.push(Line::from(vec![
-                    Span::styled(num(change.old_index()), DIM),
+                    Span::styled(num(change.old_index()), look.muted()),
                     Span::raw(" "),
-                    Span::styled(num(change.new_index()), DIM),
+                    Span::styled(num(change.new_index()), look.muted()),
                     Span::raw(" "),
-                    Span::styled("│", DIM),
+                    Span::styled("│", look.muted()),
                     Span::raw(" "),
                     Span::styled(format!("{sign} {}", clip(&value, text_w)), style),
                 ]));
@@ -179,7 +186,7 @@ mod tests {
 
     #[test]
     fn card_shows_id_location_and_fits_width() {
-        let lines = plain(&finding_card(&finding("VG-001", Severity::High), 1, 3, 40));
+        let lines = plain(&finding_card(&finding("VG-001", Severity::High), 1, 3, 40, &Look::default()));
         assert!(lines[0].contains("[高危]") && lines[0].contains("VG-001"));
         assert!(lines[0].contains("(1/3)"));
         assert!(lines.iter().any(|l| l.contains("src/db.py:42 · CWE-89")));
@@ -194,7 +201,7 @@ mod tests {
         let mut f = finding("VG-002", Severity::Low);
         f.cwe = None;
         f.suggestion.clear();
-        let lines = plain(&finding_card(&f, 2, 2, 60));
+        let lines = plain(&finding_card(&f, 2, 2, 60, &Look::default()));
         assert!(lines.iter().any(|l| l.trim() == "src/db.py:42"));
         assert!(!lines.iter().any(|l| l.contains("建议")));
     }
@@ -206,7 +213,7 @@ mod tests {
             finding("b", Severity::Critical),
             finding("c", Severity::Low),
         ];
-        let lines = plain(&summary_lines(&list));
+        let lines = plain(&summary_lines(&list, &Look::default()));
         assert!(lines[0].contains("共发现 3 个问题"));
         assert_eq!(lines.len(), 3);
         assert!(lines[1].contains("严重") && lines[1].ends_with(" 2"));
@@ -218,7 +225,7 @@ mod tests {
 
     #[test]
     fn empty_summary_says_clean() {
-        let lines = plain(&summary_lines(&[]));
+        let lines = plain(&summary_lines(&[], &Look::default()));
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("未发现安全问题"));
     }
@@ -234,7 +241,7 @@ mod tests {
 
     #[test]
     fn diff_marks_changes_and_numbers_lines() {
-        let lines = plain(&diff_lines(&fix("a\nb\nc\n", "a\nB\nc\n"), 3, 60));
+        let lines = plain(&diff_lines(&fix("a\nb\nc\n", "a\nB\nc\n"), 3, 60, &Look::default()));
         assert!(lines[0].contains("src/db.py") && lines[0].contains("+1") && lines[0].contains("-1"));
         assert!(lines.iter().any(|l| l.contains("   2      │ - b")));
         assert!(lines.iter().any(|l| l.contains("        2 │ + B")));
@@ -243,7 +250,8 @@ mod tests {
 
     #[test]
     fn diff_colors_removed_red_and_added_green() {
-        let lines = diff_lines(&fix("a\n", "b\n"), 3, 60);
+        let look = Look::default();
+        let lines = diff_lines(&fix("a\n", "b\n"), 3, 60, &look);
         let color_of = |needle: &str| {
             lines
                 .iter()
@@ -251,22 +259,22 @@ mod tests {
                 .find(|s| s.content.contains(needle))
                 .and_then(|s| s.style.fg)
         };
-        assert_eq!(color_of("- a"), Some(Color::Red));
-        assert_eq!(color_of("+ b"), Some(Color::Green));
+        assert_eq!(color_of("- a"), Some(look.palette.error));
+        assert_eq!(color_of("+ b"), Some(look.palette.success));
     }
 
     #[test]
     fn diff_collapses_distant_unchanged_regions() {
         let old: String = (1..=30).map(|i| format!("line{i}\n")).collect();
         let new = old.replace("line1\n", "LINE1\n").replace("line30\n", "LINE30\n");
-        let lines = plain(&diff_lines(&fix(&old, &new), 1, 60));
+        let lines = plain(&diff_lines(&fix(&old, &new), 1, 60, &Look::default()));
         assert!(lines.iter().any(|l| l.contains('⋯')));
         assert!(!lines.iter().any(|l| l.contains("line15")));
     }
 
     #[test]
     fn identical_files_report_no_change() {
-        let lines = plain(&diff_lines(&fix("x\n", "x\n"), 3, 60));
+        let lines = plain(&diff_lines(&fix("x\n", "x\n"), 3, 60, &Look::default()));
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("无改动"));
     }
@@ -274,7 +282,7 @@ mod tests {
     #[test]
     fn diff_lines_fit_width_with_cjk_and_tabs() {
         let new = "\t这是一行非常非常非常非常非常非常非常非常非常长的中文注释内容\n";
-        for l in plain(&diff_lines(&fix("x = 1\n", new), 3, 40)) {
+        for l in plain(&diff_lines(&fix("x = 1\n", new), 3, 40, &Look::default())) {
             assert!(measure_text_width(&l) <= 40, "too wide: {l:?}");
         }
     }

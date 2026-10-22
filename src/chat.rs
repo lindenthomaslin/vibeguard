@@ -2,6 +2,7 @@
 
 use crate::finding::{Finding, Fix};
 use crate::scan_ui;
+use crate::theme::Look;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
@@ -26,11 +27,11 @@ pub enum Entry {
         index: usize,
         total: usize,
     },
-    /// 工具调用建议：文件路径、旧代码、新代码
-    ToolSuggestion {
+    /// 一处文件改动：路径 + 改动前后的代码，按当前宽度排版成 diff
+    Diff {
         path: String,
-        old_code: String,
-        new_code: String,
+        old: String,
+        new: String,
     },
 }
 
@@ -115,77 +116,51 @@ fn marker(symbol: &'static str, color: Color) -> Span<'static> {
 }
 
 impl Entry {
-    /// 渲染成若干行；`width` 是对话区的可用列数
-    pub fn render(&self, width: usize) -> Vec<Line<'static>> {
+    /// 渲染成若干行；`width` 是对话区的可用列数，`look` 决定配色和标记符号
+    pub fn render(&self, width: usize, look: &Look) -> Vec<Line<'static>> {
         let body_w = width.saturating_sub(2).max(2);
         let plain = Style::default();
+        let g = &look.glyphs;
         match self {
-            Entry::User(t) => prefixed(wrap(t, body_w), marker("›", Color::Cyan), plain),
-            Entry::Info(t) => prefixed(wrap(t, body_w), marker("●", Color::Cyan), plain),
-            Entry::Success(t) => prefixed(wrap(t, body_w), marker("✓", Color::Green), plain),
-            Entry::Warn(t) => prefixed(
-                wrap(t, body_w),
-                marker("!", Color::Yellow),
-                Style::default().fg(Color::Yellow),
-            ),
-            Entry::Error(t) => prefixed(
-                wrap(t, body_w),
-                marker("✗", Color::Red),
-                Style::default().fg(Color::Red),
-            ),
+            Entry::User(t) => prefixed(wrap(t, body_w), marker(g.user, look.palette.accent), plain),
+            Entry::Info(t) => prefixed(wrap(t, body_w), marker(g.info, look.palette.accent), plain),
+            Entry::Success(t) => {
+                prefixed(wrap(t, body_w), marker(g.success, look.palette.success), plain)
+            }
+            Entry::Warn(t) => prefixed(wrap(t, body_w), marker(g.warn, look.palette.warn), look.warn()),
+            Entry::Error(t) => {
+                prefixed(wrap(t, body_w), marker(g.error, look.palette.error), look.error())
+            }
             Entry::Block(lines) => lines.clone(),
-            Entry::Summary(findings) => scan_ui::summary_lines(findings),
+            Entry::Summary(findings) => scan_ui::summary_lines(findings, look),
             Entry::Card {
                 finding,
                 fix,
                 index,
                 total,
             } => {
-                let mut out = scan_ui::finding_card(finding, *index, *total, width);
+                let mut out = scan_ui::finding_card(finding, *index, *total, width, look);
                 out.push(Line::raw(""));
-                out.extend(scan_ui::diff_lines(fix, 3, width));
+                out.extend(scan_ui::diff_lines(fix, 3, width, look));
                 out
             }
-            Entry::ToolSuggestion {
-                path,
-                old_code,
-                new_code,
-            } => {
-                let mut out = Vec::new();
-                out.push(Line::from(vec![
-                    Span::styled("📝 代码建议", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::raw(format!("  {}", path)),
-                ]));
-                out.push(Line::raw(""));
-
-                // 显示 diff：红绿对比
-                let old_lines: Vec<&str> = old_code.lines().collect();
-                let new_lines: Vec<&str> = new_code.lines().collect();
-
-                // 简单的上下文显示：显示前后各 1 行
-                let max_line = old_lines.len().max(new_lines.len());
-                for i in 0..max_line {
-                    if i < old_lines.len() {
-                        out.push(Line::from(vec![
-                            Span::styled("- ", Style::new().fg(Color::Red)),
-                            Span::raw(old_lines[i].to_string()),
-                        ]));
-                    }
-                    if i < new_lines.len() {
-                        out.push(Line::from(vec![
-                            Span::styled("+ ", Style::new().fg(Color::Green)),
-                            Span::raw(new_lines[i].to_string()),
-                        ]));
-                    }
-                }
-                out
+            Entry::Diff { path, old, new } => {
+                // 复用扫描界面的 diff 排版：只显示改动和前后几行上下文，
+                // 整文件重写时也不会把整份文件刷两遍
+                let fix = Fix {
+                    finding_id: String::new(),
+                    file: path.clone(),
+                    old: old.clone(),
+                    new: new.clone(),
+                };
+                scan_ui::diff_lines(&fix, 3, width, look)
             }
             Entry::Assistant { reasoning, content } => {
-                let dim = Style::default().add_modifier(Modifier::DIM);
+                let dim = look.muted();
                 let mut out = Vec::new();
                 if !reasoning.trim().is_empty() {
                     out.push(Line::styled(
-                        "✻ 思考过程",
+                        format!("{} 思考过程", g.thinking),
                         dim.add_modifier(Modifier::ITALIC),
                     ));
                     for row in wrap(reasoning.trim_end(), body_w) {
@@ -198,7 +173,7 @@ impl Entry {
                 if !content.is_empty() {
                     out.extend(prefixed(
                         wrap(content.trim_end(), body_w),
-                        marker("●", Color::Cyan),
+                        marker(g.info, look.palette.accent),
                         plain,
                     ));
                 }
@@ -258,15 +233,15 @@ impl Transcript {
     /// 全部条目渲染成行，条目之间空一行；渲染为空的条目（还没收到内容的回复）会被跳过
     #[cfg(test)]
     pub fn lines(&self, width: usize) -> Vec<Line<'static>> {
-        self.lines_marked(width).0
+        self.lines_marked(width, &Look::default()).0
     }
 
     /// 同 `lines`，另外返回最后一个条目的第一行在结果中的下标（没有内容时为 0）
-    pub fn lines_marked(&self, width: usize) -> (Vec<Line<'static>>, usize) {
+    pub fn lines_marked(&self, width: usize, look: &Look) -> (Vec<Line<'static>>, usize) {
         let mut out: Vec<Line<'static>> = Vec::new();
         let mut last_start = 0;
         for entry in &self.entries {
-            let rows = entry.render(width);
+            let rows = entry.render(width, look);
             if rows.is_empty() {
                 continue;
             }
@@ -399,7 +374,7 @@ mod tests {
 
     #[test]
     fn user_entry_has_marker_and_indented_continuation() {
-        let rows = plain(&Entry::User("hello world".into()).render(8));
+        let rows = plain(&Entry::User("hello world".into()).render(8, &Look::default()));
         assert_eq!(rows, ["› hello", "  world"]);
     }
 
@@ -409,7 +384,7 @@ mod tests {
             reasoning: "想一想".into(),
             content: "答案".into(),
         };
-        let rows = plain(&e.render(40));
+        let rows = plain(&e.render(40, &Look::default()));
         assert_eq!(rows, ["✻ 思考过程", "  想一想", "", "● 答案"]);
     }
 
@@ -446,7 +421,7 @@ mod tests {
             total: 3,
         };
         for width in [40, 80] {
-            let rows = plain(&e.render(width));
+            let rows = plain(&e.render(width, &Look::default()));
             assert!(rows[0].contains("VG-001") && rows[0].contains("(1/3)"));
             assert!(rows.iter().any(|r| r.contains("│ - API_KEY")));
             assert!(rows.iter().any(|r| r.contains("│ + API_KEY")));
@@ -459,7 +434,7 @@ mod tests {
     #[test]
     fn summary_entry_renders_counts() {
         let (findings, _) = crate::review::demo_data();
-        let rows = plain(&Entry::Summary(findings).render(60));
+        let rows = plain(&Entry::Summary(findings).render(60, &Look::default()));
         assert!(rows[0].contains("共发现 3 个问题"));
     }
 
@@ -509,14 +484,14 @@ mod tests {
     #[test]
     fn lines_marked_points_at_the_first_row_of_the_last_entry() {
         let mut t = Transcript::default();
-        assert_eq!(t.lines_marked(20).1, 0);
+        assert_eq!(t.lines_marked(20, &Look::default()).1, 0);
         t.push(Entry::Info("one".into()));
         t.push(Entry::Info("two three four five six".into()));
-        let (lines, start) = t.lines_marked(10);
+        let (lines, start) = t.lines_marked(10, &Look::default());
         assert!(plain(&lines)[start].starts_with("● two"));
         // 空的回复条目不算「最后一个条目」
         t.start_assistant();
-        assert_eq!(t.lines_marked(10).1, start);
+        assert_eq!(t.lines_marked(10, &Look::default()).1, start);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! 全屏布局：顶部图标栏、中间对话区、选择区、固定在底部的输入框和状态栏。
 //! 只做矩形计算，不碰终端，便于测试。
 
-use crate::spider;
+use crate::icon;
 use ratatui::layout::Rect;
 
 /// 终端高度不足时，图标栏收成一行
@@ -37,7 +37,7 @@ pub fn areas(area: Rect, input_rows: u16, choice_rows: u16, compact_header: bool
     // 对话区优先于图标栏和选择区：它们只使用剩余空间里超出 MIN_BODY 的部分
     let header_want =
         if !compact_header && area.height >= FULL_HEADER_MIN_HEIGHT && area.width >= 50 {
-            spider::HEIGHT as u16 + 2
+            icon::AVATAR_ROWS + 2
         } else {
             1
         };
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn large_terminal_uses_full_header() {
         let a = areas(Rect::new(0, 0, 100, 40), 1, 0, false);
-        assert_eq!(a.header.height, spider::HEIGHT as u16 + 2);
+        assert_eq!(a.header.height, icon::AVATAR_ROWS + 2);
         assert_eq!(a.input.height, 3);
         assert_eq!(a.status.height, 1);
         assert_eq!(a.choice.height, 0);

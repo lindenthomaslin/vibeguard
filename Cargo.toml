@@ -25,6 +25,7 @@ tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "sync", "
 toml = "1.1.8"
 unicode-width = "0.2.2"
 image = "0.25.0"
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

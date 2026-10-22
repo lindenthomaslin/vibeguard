@@ -232,7 +232,9 @@ impl Editor {
 
     // ---- 斜杠命令菜单 ----
 
-    /// 输入以 `/` 开头且还没有空白时，返回匹配的命令
+    /// 输入以 `/` 开头且还没有空白时，返回匹配的命令。
+    /// 完全匹配的排在最前：`/mode` 是 `/model` 的前缀，不排前就永远只能补全成
+    /// `/model`，按 Enter 也轮不到自己。
     pub fn matches(&self) -> Vec<Candidate> {
         if self.buf.first() != Some(&'/') || self.buf.iter().any(|c| c.is_whitespace()) {
             return Vec::new();
@@ -241,11 +243,15 @@ impl Editor {
         if self.cached_matches.0 == typed {
             return self.cached_matches.1.clone();
         }
-        self.commands
+        let mut found: Vec<Candidate> = self
+            .commands
             .iter()
             .copied()
             .filter(|c| c.name.starts_with(&typed))
-            .collect()
+            .collect();
+        // 稳定排序：完全匹配的提到最前，其余保持原顺序
+        found.sort_by_key(|c| c.name != typed);
+        found
     }
 
     pub fn menu_open(&self) -> bool {
@@ -472,5 +478,24 @@ mod tests {
     fn enter_submits_exact_command_without_completing() {
         let mut e = ed("/help");
         assert_eq!(e.submit().as_deref(), Some("/help"));
+    }
+
+    /// `/mode` 是 `/model` 的前缀：敲全了就得跑自己，不能被补全成更长的那个
+    #[test]
+    fn an_exact_match_outranks_a_longer_command_that_starts_the_same() {
+        const CMDS: &[Candidate] = &[
+            Candidate { name: "/model", desc: "模型" },
+            Candidate { name: "/mode", desc: "模式" },
+        ];
+        let mut e = Editor::new(CMDS);
+        e.insert_str("/mode");
+        assert_eq!(e.matches()[0].name, "/mode");
+        assert_eq!(e.submit().as_deref(), Some("/mode"));
+
+        // 只敲了前缀时仍然补全到最长的那个
+        let mut e = Editor::new(CMDS);
+        e.insert_str("/mod");
+        assert_eq!(e.submit(), None);
+        assert_eq!(e.text(), "/model ");
     }
 }

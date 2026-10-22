@@ -2,12 +2,36 @@
 
 use crate::config::Config;
 use crate::llm::{ChatResponse, StreamEvent};
-use console::{Term, measure_text_width, style, truncate_str};
+use crate::theme::Theme;
+use console::{Color, Term, measure_text_width, style, truncate_str};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fmt::Display;
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
+
+/// 非交互模式没有地方传 `Look`，主题放一个进程级开关就够了：
+/// 一个进程只服务一次配置，`/theme` 改了立刻生效。
+static LIGHT: AtomicU8 = AtomicU8::new(0);
+
+pub fn set_theme(theme: Theme) {
+    LIGHT.store(u8::from(theme == Theme::Light), Ordering::Relaxed);
+}
+
+fn light() -> bool {
+    LIGHT.load(Ordering::Relaxed) == 1
+}
+
+/// 主色。浅色底上青色看不清，换成深蓝
+fn accent() -> Color {
+    if light() { Color::Blue } else { Color::Cyan }
+}
+
+/// 警告色。`Yellow` 压在浅色底上几乎看不见，换成洋红
+fn warning() -> Color {
+    if light() { Color::Magenta } else { Color::Yellow }
+}
 
 pub fn term_width() -> usize {
     let (_, cols) = Term::stdout().size();
@@ -33,7 +57,7 @@ pub fn boxed(lines: &[String]) {
         .max()
         .unwrap_or(0)
         .min(max_inner);
-    let edge = |s: String| style(s).cyan().to_string();
+    let edge = |s: String| style(s).fg(accent()).to_string();
     println!("{}", edge(format!("╭{}╮", "─".repeat(inner + 2))));
     for line in lines {
         let line = truncate_str(line, inner, "…");
@@ -56,7 +80,7 @@ pub fn banner(cfg: &Config) {
     boxed(&[
         format!(
             "{} {}",
-            style("✻").cyan().bold(),
+            style("✻").fg(accent()).bold(),
             style(format!("VibeGuard v{}", env!("CARGO_PKG_VERSION"))).bold()
         ),
         style("AI 生成代码的安全扫描与修复").dim().to_string(),
@@ -72,7 +96,7 @@ pub fn banner(cfg: &Config) {
 }
 
 pub fn info(msg: &str) {
-    println!("{} {msg}", style("●").cyan());
+    println!("{} {msg}", style("●").fg(accent()));
 }
 
 pub fn success(msg: &str) {
@@ -80,7 +104,11 @@ pub fn success(msg: &str) {
 }
 
 pub fn warn(msg: &str) {
-    eprintln!("{} {}", style("!").yellow().bold(), style(msg).yellow());
+    eprintln!(
+        "{} {}",
+        style("!").fg(warning()).bold(),
+        style(msg).fg(warning())
+    );
 }
 
 pub fn error(msg: &str) {

@@ -3,16 +3,18 @@ mod chat;
 mod commands;
 mod config;
 mod editor;
-mod fast_input;
 mod finding;
+mod graphics;
+mod icon;
 mod input;
 mod llm;
+mod mode;
 mod prompt;
 mod repl;
 mod review;
 mod scan_ui;
 mod sessions;
-mod spider;
+mod theme;
 mod tokens;
 mod tools;
 mod tui;
@@ -21,7 +23,7 @@ mod vuln_checklist;
 mod vuln_scanner;
 mod scan_session;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use app::{App, Overrides};
 use clap::{Parser, Subcommand};
 use config::Thinking;
@@ -48,28 +50,16 @@ struct Cli {
     #[arg(long, global = true, value_name = "MODE")]
     thinking: Option<Thinking>,
 
+    /// 内部用：查询终端的图形能力，把结果写进这个文件后退出
+    #[arg(long, hide = true, value_name = "FILE")]
+    probe_graphics: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// 扫描项目中的安全漏洞（开发中）
-    Scan {
-        #[arg(default_value = ".")]
-        path: PathBuf,
-    },
-    /// 修复漏洞（开发中）
-    Fix {
-        #[arg(default_value = ".")]
-        path: PathBuf,
-        /// 直接修复，不逐条确认
-        #[arg(long, conflicts_with = "review")]
-        auto: bool,
-        /// 先生成报告，逐条确认 diff 后再修复（默认）
-        #[arg(long)]
-        review: bool,
-    },
     /// 查看或修改配置；不带子命令时进入配置向导
     Config {
         #[command(subcommand)]
@@ -101,6 +91,11 @@ enum ConfigAction {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    // 图形能力查询在子进程里跑：它可能卡在读 stdin 上，父进程要能直接把它杀掉
+    if let Some(path) = &cli.probe_graphics {
+        graphics::probe_child(path);
+        return ExitCode::SUCCESS;
+    }
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -146,12 +141,5 @@ async fn run(cli: Cli) -> Result<()> {
             Some(ConfigAction::Set { key, value }) => commands::config_set(&mut app, &key, value),
             Some(ConfigAction::Unset { key }) => commands::config_unset(&mut app, &key),
         },
-        Some(Command::Scan { path }) => {
-            bail!("scan 尚在开发中（目标：{}）", path.display())
-        }
-        Some(Command::Fix { path, auto, review }) => {
-            let mode = if auto && !review { "auto" } else { "review" };
-            bail!("fix 尚在开发中（目标：{}，模式：{mode}）", path.display())
-        }
     }
 }
