@@ -1,0 +1,30 @@
+[package]
+name = "vibeguard"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+console = "0.16.6"
+crossterm = "0.29.0"
+dialoguer = "0.12.0"
+dirs = "7.0.0"
+futures-util = "0.3.34"
+ignore = "0.4.33"
+indicatif = "0.18.6"
+once_cell = "1.21.4"
+ratatui = { version = "0.30.2", features = ["crossterm_0_29"] }
+regex = "1.13.1"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls", "http2"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+similar = "3.2.0"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "signal"] }
+toml = "1.1.8"
+unicode-width = "0.2.2"
+image = "0.25.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
