@@ -1,132 +1,117 @@
-//! 高性能输入框：最小化每帧的计算开销
+//! 超低延迟输入框：只做必要的终端操作
 
 use crate::editor::Editor;
 use crate::input::{Outcome, handle_key};
-use crate::ui;
-use anyhow::Result;
-use crossterm::cursor::{MoveDown, MoveToColumn, MoveUp};
-use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
+use crossterm::event::{self, Event, DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::terminal::{self, ClearType};
+use crossterm::cursor::{MoveTo, Show, Hide};
 use crossterm::style::Print;
-use crossterm::terminal::{self, Clear, ClearType};
 use crossterm::{execute, queue};
 use std::io::{self, BufRead, IsTerminal, Write};
+use anyhow::Result;
 use console::style;
-
-struct FastPainter {
-    cursor_row: usize,
-    last_text: String,
-    last_cursor: usize,
-    last_show_menu: bool,
-}
-
-impl FastPainter {
-    fn new() -> Self {
-        Self {
-            cursor_row: 0,
-            last_text: String::new(),
-            last_cursor: 0,
-            last_show_menu: false,
-        }
-    }
-
-    fn draw_fast(&mut self, ed: &Editor, width: usize, show_menu: bool) -> io::Result<()> {
-        let text = ed.text();
-        let cursor = ed.cursor();
-
-        // 跳过完全相同的帧
-        if text == self.last_text && cursor == self.last_cursor && show_menu == self.last_show_menu {
-            return Ok(());
-        }
-
-        self.last_text = text.clone();
-        self.last_cursor = cursor;
-        self.last_show_menu = show_menu;
-
-        let mut out = io::stdout().lock();
-
-        // 快速绘制：最小化终端操作
-        if self.cursor_row > 0 {
-            queue!(out, MoveUp(self.cursor_row as u16))?;
-        }
-        queue!(out, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
-
-        // 简化框线
-        let bar = "─".repeat(width - 2);
-        let edge = |s: &str| style(s).cyan().to_string();
-
-        queue!(out, Print(edge(&format!("╭{bar}╮\r\n"))))?;
-        queue!(out, Print(format!("{} › {} {}\r\n", edge("│"), text, edge("│"))))?;
-        queue!(out, Print(edge(&format!("╰{bar}╯"))))?;
-
-        if show_menu {
-            let matches = ed.matches();
-            if !matches.is_empty() {
-                queue!(out, Print("\r\n"))?;
-                let sel = ed.menu_selected();
-                for (i, c) in matches.iter().enumerate().take(6) {
-                    let line = format!("  {:<20}{}", c.name, c.desc);
-                    queue!(out, Print(
-                        if i == sel {
-                            format!("{}\r\n", style(line).cyan().bold())
-                        } else {
-                            format!("{}\r\n", style(line).dim())
-                        }
-                    ))?;
-                }
-                self.cursor_row = 4 + matches.len().min(6);
-            } else {
-                self.cursor_row = 2;
-            }
-        } else {
-            self.cursor_row = 2;
-        }
-
-        queue!(out, MoveUp((self.cursor_row - 1) as u16))?;
-        queue!(out, MoveToColumn((4 + cursor) as u16))?;
-
-        out.flush()
-    }
-
-    fn finish(&mut self, ed: &Editor, width: usize) -> io::Result<()> {
-        self.draw_fast(ed, width, false)?;
-        let mut out = io::stdout().lock();
-        queue!(out, MoveDown(1 as u16))?;
-        queue!(out, Print("\r\n"))?;
-        out.flush()
-    }
-}
 
 pub fn read_input_fast(ed: &mut Editor) -> Result<Outcome> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return read_plain();
     }
 
+    // 进入原始模式
     terminal::enable_raw_mode()?;
-    let _ = execute!(io::stdout(), EnableBracketedPaste);
+    let mut stdout = io::stdout();
 
-    let mut painter = FastPainter::new();
-    let width = ui::term_width();
+    execute!(stdout, EnableBracketedPaste, Hide)?;
+
+    // 立即渲染初始框
+    render_frame(&mut stdout, ed)?;
 
     let result = loop {
-        painter.draw_fast(ed, width, true)?;
+        // 轮询事件（不阻塞）
+        if event::poll(std::time::Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(key) => {
+                    let outcome = handle_key(ed, key);
 
-        match event::read()? {
-            Event::Key(key) => {
-                let outcome = handle_key(ed, key);
-                if outcome != Outcome::Continue {
-                    painter.finish(ed, width)?;
-                    break outcome;
+                    // 立即渲染改变
+                    render_frame(&mut stdout, ed)?;
+
+                    if outcome != Outcome::Continue {
+                        break outcome;
+                    }
                 }
+                Event::Paste(text) => {
+                    ed.insert_str(&text);
+                    render_frame(&mut stdout, ed)?;
+                }
+                Event::Resize(_, _) => {
+                    execute!(stdout, crossterm::terminal::Clear(ClearType::All))?;
+                    render_frame(&mut stdout, ed)?;
+                }
+                _ => {}
             }
-            Event::Paste(text) => ed.insert_str(&text),
-            _ => {}
         }
     };
 
-    let _ = execute!(io::stdout(), DisableBracketedPaste);
+    // 清理
+    execute!(stdout, DisableBracketedPaste, Show)?;
     terminal::disable_raw_mode()?;
 
     Ok(result)
+}
+
+fn render_frame(stdout: &mut io::Stdout, ed: &Editor) -> io::Result<()> {
+    let text = ed.text();
+    let cursor = ed.cursor();
+
+    // 移到左上角
+    queue!(stdout, MoveTo(0, 0))?;
+
+    // 最小框线
+    let border_len = (text.len() + 6).min(80);
+    queue!(stdout, Print("╭"))?;
+    for _ in 0..border_len {
+        queue!(stdout, Print("─"))?;
+    }
+    queue!(stdout, Print("╮\r\n"))?;
+
+    // 输入行
+    queue!(stdout, Print("│ › "))?;
+    queue!(stdout, Print(&text))?;
+    for _ in text.len()..border_len.saturating_sub(4) {
+        queue!(stdout, Print(" "))?;
+    }
+    queue!(stdout, Print(" │\r\n"))?;
+
+    // 下框线
+    queue!(stdout, Print("╰"))?;
+    for _ in 0..border_len {
+        queue!(stdout, Print("─"))?;
+    }
+    queue!(stdout, Print("╯"))?;
+
+    // 菜单
+    if ed.menu_open() {
+        queue!(stdout, Print("\r\n"))?;
+        let matches = ed.matches();
+        let sel = ed.menu_selected();
+        for (i, c) in matches.iter().take(6).enumerate() {
+            if i > 0 {
+                queue!(stdout, Print("\r\n"))?;
+            }
+            let line = format!("  {:<20}{}", c.name, c.desc);
+            if i == sel {
+                queue!(stdout, Print(style(line).cyan().bold().to_string()))?;
+            } else {
+                queue!(stdout, Print(style(line).dim().to_string()))?;
+            }
+        }
+    }
+
+    // 光标位置
+    queue!(stdout, MoveTo((4 + cursor as u16).min(border_len as u16 - 2), 1))?;
+    stdout.flush()?;
+
+    Ok(())
 }
 
 fn read_plain() -> Result<Outcome> {
