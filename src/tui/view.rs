@@ -137,7 +137,12 @@ pub fn draw(frame: &mut Frame, mut p: Props<'_>) {
         // plan 是「强制只读」：光写 plan 不够，得让用户一眼看出这个模式不管
         // permission_mode 设成什么都改不了文件
         let chip_text = if p.mode == Mode::Plan {
-            format!(" {} {} · 只读 ", p.mode.glyph(), p.mode.label())
+            format!(
+                " {} {} · {} ",
+                p.mode.glyph(),
+                p.mode.label(),
+                crate::i18n::t("只读", "read-only")
+            )
         } else {
             format!(" {} {} ", p.mode.glyph(), p.mode.label())
         };
@@ -206,7 +211,13 @@ fn draw_header(frame: &mut Frame, rect: Rect, p: &mut Props<'_>) {
     let muted = p.look.muted();
     let lines = vec![
         Line::styled(title, Style::new().add_modifier(Modifier::BOLD)),
-        Line::styled("AI 生成代码的安全扫描与修复", muted),
+        Line::styled(
+            crate::i18n::t(
+                "AI 生成代码的安全扫描与修复",
+                "Security review for AI-written code",
+            ),
+            muted,
+        ),
         Line::from(vec![
             Span::styled("model ", muted),
             Span::raw(p.model.to_string()),
@@ -352,7 +363,13 @@ fn draw_splash(frame: &mut Frame, area: Rect, p: &mut Props<'_>, splash: &Splash
 /// 说明文字。图上（或字符画里）已经有手写的 vibeguard，就不用再写一遍；
 /// 只有字标那一档需要把名字打出来——终端里没有大字号，靠拉开字距撑门面。
 fn caption_lines(splash: &Splash, look: &Look) -> Vec<Line<'static>> {
-    let tagline = Line::styled("AI 生成代码的安全扫描与修复", look.muted());
+    let tagline = Line::styled(
+        crate::i18n::t(
+            "AI 生成代码的安全扫描与修复",
+            "Security review for AI-written code",
+        ),
+        look.muted(),
+    );
     match splash {
         Splash::Image(..) | Splash::Art(..) => vec![tagline],
         Splash::Wordmark => vec![

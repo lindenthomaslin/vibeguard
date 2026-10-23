@@ -17,7 +17,6 @@ use crate::finding::{Finding, Fix};
 use crate::graphics::Graphics;
 use crate::llm::{ChatOptions, ChatResponse, LlmClient, Message, Role, StreamEvent};
 use crate::mode::Mode;
-use crate::repl::SYSTEM_PROMPT;
 use crate::sessions::{Conversation, Store, format_ago};
 use crate::theme::{FontStyle, Look, Theme};
 use crate::ui;
@@ -44,8 +43,17 @@ use view::Props;
 /// 同时跑几批判定。3 是折中：再多容易撞上端点的速率限制，反而更慢。
 const CONCURRENT_JUDGEMENTS: usize = 3;
 
-const HINT: &str = "Enter 发送 · Ctrl-J 换行 · Shift-Tab 换模式 · / 命令 · Ctrl-D 退出";
-const BUSY_HINT: &str = "Esc 取消 · PgUp/PgDn 滚动";
+/// 底部那行快捷键提示
+fn hint() -> &'static str {
+    crate::i18n::t(
+        "Enter 发送 · Ctrl-J 换行 · Shift-Tab 换模式 · / 命令 · Ctrl-D 退出",
+        "Enter send · Ctrl-J newline · Shift-Tab mode · / commands · Ctrl-D quit",
+    )
+}
+
+fn busy_hint() -> &'static str {
+    crate::i18n::t("Esc 取消 · PgUp/PgDn 滚动", "Esc cancel · PgUp/PgDn scroll")
+}
 
 /// 一轮对话的最终结果
 struct ChatDone {
@@ -262,19 +270,33 @@ impl Session<'_> {
     fn welcome(&mut self) {
         if self.app.effective().api_key.is_none() {
             self.state.push(Entry::Warn(
-                "尚未配置 API Key：输入 /model 填写 API 地址、Key 和模型，或设置环境变量 DEEPSEEK_API_KEY"
-                    .into(),
+                crate::i18n::t(
+                    "尚未配置 API Key：输入 /model 填写 API 地址、Key 和模型，或设置环境变量 DEEPSEEK_API_KEY",
+                    "No API key yet: run /model to set the endpoint, key and model, or export DEEPSEEK_API_KEY",
+                )
+                .into(),
             ));
         }
         for w in self.app.effective().warnings() {
             self.state.push(Entry::Warn(w));
         }
-        let mut tip = "直接输入问题与 AI 对话，输入 / 查看命令".to_string();
+        let mut tip = crate::i18n::t(
+            "直接输入问题与 AI 对话，输入 / 查看命令",
+            "Type a question to talk to the model, or / for commands",
+        )
+        .to_string();
         if let Ok(Some(last)) = self.store.latest(None) {
-            tip.push_str(&format!(
-                "；/resume 可恢复上一次对话「{}」（{}）",
-                last.title,
-                format_ago(last.updated, now_secs())
+            tip.push_str(&crate::i18n::pick(
+                format!(
+                    "；/resume 可恢复上一次对话「{}」（{}）",
+                    last.title,
+                    format_ago(last.updated, now_secs())
+                ),
+                format!(
+                    "; /resume reopens “{}” ({})",
+                    last.title,
+                    format_ago(last.updated, now_secs())
+                ),
             ));
         }
         self.state.push(Entry::Info(tip));
@@ -300,9 +322,9 @@ impl Session<'_> {
         let status = if let Some(hint) = self.state.hint() {
             hint.to_string()
         } else if self.state.busy.is_some() {
-            BUSY_HINT.to_string()
+            busy_hint().to_string()
         } else if self.last_usage.is_empty() {
-            HINT.to_string()
+            hint().to_string()
         } else {
             self.last_usage.clone()
         };
@@ -552,7 +574,7 @@ impl Session<'_> {
             }
         };
         let mode = self.state.mode;
-        let system = format!("{SYSTEM_PROMPT}{}", mode.instruction());
+        let system = format!("{}{}", crate::repl::system_prompt(), mode.instruction());
         let mut messages = Vec::with_capacity(self.conv.messages.len() + 2);
         messages.push(Message::system(&system));
         messages.extend(self.conv.messages.iter().cloned());
@@ -862,7 +884,8 @@ impl Session<'_> {
         self.pending_user = None;
         self.pending_reply = None;
         self.state.end_request();
-        self.state.push(Entry::Warn("已取消".into()));
+        self.state
+            .push(Entry::Warn(crate::i18n::t("已取消", "Cancelled").into()));
     }
 
     // ---- 模型配置 ----
@@ -1133,14 +1156,21 @@ impl Session<'_> {
         std::fs::write(&json_path, js)
             .with_context(|| format!("写入失败：{}", json_path.display()))?;
 
-        self.state.push(Entry::Success(format!(
-            "报告已写入 {}（共 {} 个问题）",
-            ui::tilde(&md_path),
-            self.state.findings.len()
+        self.state.push(Entry::Success(crate::i18n::pick(
+            format!(
+                "报告已写入 {}（共 {} 个问题）",
+                ui::tilde(&md_path),
+                self.state.findings.len()
+            ),
+            format!(
+                "Report written to {} ({} findings)",
+                ui::tilde(&md_path),
+                self.state.findings.len()
+            ),
         )));
-        self.state.push(Entry::Info(format!(
-            "同一份数据的机器可读版本：{}",
-            ui::tilde(&json_path)
+        self.state.push(Entry::Info(crate::i18n::pick(
+            format!("同一份数据的机器可读版本：{}", ui::tilde(&json_path)),
+            format!("Machine-readable version: {}", ui::tilde(&json_path)),
         )));
         // 空报告最容易骗人，这里再说一遍覆盖了多少
         if self.state.findings.is_empty() {
@@ -1159,7 +1189,13 @@ impl Session<'_> {
     /// 用户按 y 之后（`Action::ApplyFixes`），这里一个字节都不动。
     fn start_fix(&mut self, args: &[&str]) -> Result<()> {
         if self.state.busy.is_some() {
-            bail!("正在忙，等这次结束或者按 Esc 取消");
+            bail!(
+                "{}",
+                crate::i18n::t(
+                    "正在忙，等这次结束或者按 Esc 取消",
+                    "Busy — wait for this to finish, or press Esc to cancel"
+                )
+            );
         }
         if self.state.findings.is_empty() {
             bail!("还没有扫描结果，先跑 /scan 或 /scan --ai");
@@ -1359,7 +1395,13 @@ impl Session<'_> {
     /// 把本地规则判不了的条目分批交给模型逐条判断。两段都只读。
     fn start_scan(&mut self, args: &[&str]) -> Result<()> {
         if self.state.busy.is_some() {
-            bail!("正在忙，等这次结束或者按 Esc 取消");
+            bail!(
+                "{}",
+                crate::i18n::t(
+                    "正在忙，等这次结束或者按 Esc 取消",
+                    "Busy — wait for this to finish, or press Esc to cancel"
+                )
+            );
         }
         let with_ai = args.contains(&"--ai");
         // 默认只判安全类分类；--all 才把工程规范类也交给模型
@@ -1387,9 +1429,9 @@ impl Session<'_> {
         let req = self.next_req();
         let tx = self.tx.clone();
         let config_path = self.app.config_path.clone();
-        self.state.push(Entry::Info(format!(
-            "正在扫描 {}（本地规则，只读）…",
-            ui::tilde(&root)
+        self.state.push(Entry::Info(crate::i18n::pick(
+            format!("正在扫描 {}（本地规则，只读）…", ui::tilde(&root)),
+            format!("Scanning {} (local rules, read-only)…", ui::tilde(&root)),
         )));
         if with_ai && !scan_all {
             // 说清楚这一轮判什么、不判什么。少了这句，「覆盖 294/410」会让人
@@ -1408,15 +1450,19 @@ impl Session<'_> {
                 })
                 .sum();
             self.state.skipped_items = skipped;
-            self.state.push(Entry::Info(format!(
-                "AI 判定只跑安全类分类（A–M、P、R），跳过 N/O/Q/S 的 {skipped} 条工程规范条目；\
-                 要全跑加 --all"
+            self.state.push(Entry::Info(crate::i18n::pick(
+                format!(
+                    "AI 判定只跑安全类分类（A–M、P、R），跳过 N/O/Q/S 的 {skipped} 条工程规范条目；要全跑加 --all"
+                ),
+                format!(
+                    "AI judgement covers security categories only (A–M, P, R); skipping {skipped} engineering-hygiene items. Use --all to include them."
+                ),
             )));
         }
         self.state.busy = Some(if with_ai {
-            "扫描中（含模型判定）…".into()
+            crate::i18n::t("扫描中（含模型判定）…", "Scanning (with model judgement)…").into()
         } else {
-            "扫描中…".into()
+            crate::i18n::t("扫描中…", "Scanning…").into()
         });
 
         self.task = Some(tokio::spawn(async move {
@@ -1461,9 +1507,15 @@ impl Session<'_> {
             {
                 let _ = tx.send(Msg::ScanProgress(
                     req,
-                    format!(
-                        "文件一个都没变：直接复用上次的 {} 条判定，这一轮不发任何请求",
-                        prev.judgements.len()
+                    crate::i18n::pick(
+                        format!(
+                            "文件一个都没变：直接复用上次的 {} 条判定，这一轮不发任何请求",
+                            prev.judgements.len()
+                        ),
+                        format!(
+                            "Nothing changed: reusing the {} verdicts from last time, no requests sent",
+                            prev.judgements.len()
+                        ),
                     ),
                 ));
                 let _ = tx.send(Msg::ScanAiDone(
@@ -1553,11 +1605,19 @@ impl Session<'_> {
                     async move {
                         let _ = tx.send(Msg::ScanProgress(
                             req,
-                            format!(
-                                "模型判定 {}/{total}：{}（{} 条）",
-                                i + 1,
-                                batch.label,
-                                batch.items.len()
+                            crate::i18n::pick(
+                                format!(
+                                    "模型判定 {}/{total}：{}（{} 条）",
+                                    i + 1,
+                                    batch.label,
+                                    batch.items.len()
+                                ),
+                                format!(
+                                    "Judging {}/{total}: {} ({} items)",
+                                    i + 1,
+                                    batch.label,
+                                    batch.items.len()
+                                ),
                             ),
                         ));
                         let messages = [Message::user(crate::scan_ai::prompt(&batch, &index))];
@@ -1657,7 +1717,10 @@ impl Session<'_> {
 
             let _ = tx.send(Msg::ScanProgress(
                 req,
-                format!("模型判定结束，共消耗 {tokens} tokens"),
+                crate::i18n::pick(
+                    format!("模型判定结束，共消耗 {tokens} tokens"),
+                    format!("Judgement finished, {tokens} tokens used"),
+                ),
             ));
             let _ = tx.send(Msg::ScanAiDone(req, judgements, failed, snapshot));
         }));
@@ -1684,7 +1747,9 @@ impl Session<'_> {
             })
             .collect();
         if items.is_empty() {
-            self.state.push(Entry::Info("还没有历史对话".into()));
+            self.state.push(Entry::Info(
+                crate::i18n::t("还没有历史对话", "No history yet").into(),
+            ));
             return Ok(());
         }
         self.state.open_sessions(items, query);
@@ -1762,6 +1827,7 @@ impl Session<'_> {
                 },
                 _ => bail!("用法：/mode [plan|confirm|auto]"),
             },
+            "lang" => self.set_lang(&args)?,
             "theme" => match args.as_slice() {
                 [] => self.state.push(Entry::Block(self.appearance_lines())),
                 [name] => match Theme::parse(name) {
@@ -1951,6 +2017,47 @@ impl Session<'_> {
     }
 
     /// 换配色。只改本次会话，要长期生效用 /config set theme
+    /// `/lang [en|zh]`：不带参数时列出两种语言
+    fn set_lang(&mut self, args: &[&str]) -> Result<()> {
+        let Some(raw) = args.first() else {
+            let dim = Style::new().add_modifier(Modifier::DIM);
+            let current = crate::i18n::current();
+            let mut out = vec![Line::from(vec![
+                Span::styled(
+                    crate::i18n::t("界面语言 ", "Language "),
+                    Style::new().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(current.label()),
+            ])];
+            for lang in [crate::i18n::Lang::En, crate::i18n::Lang::Zh] {
+                let mark = if lang == current { "›" } else { " " };
+                out.push(Line::from(vec![
+                    Span::styled(format!("  {mark} "), dim),
+                    Span::raw(lang.label()),
+                ]));
+            }
+            out.push(Line::styled(
+                crate::i18n::t(
+                    "  /lang en 或 /lang zh 切换（默认英文）",
+                    "  /lang en or /lang zh to switch (English is the default)",
+                ),
+                dim,
+            ));
+            self.state.push(Entry::Block(out));
+            return Ok(());
+        };
+
+        let Some(lang) = crate::i18n::Lang::parse(raw) else {
+            bail!("lang 可选值为 en / zh，收到 `{raw}`");
+        };
+        self.app.file.set("lang", lang.code())?;
+        self.app.save()?;
+        crate::i18n::set(lang);
+        self.state
+            .push(Entry::Success(format!("Language: {}", lang.label())));
+        Ok(())
+    }
+
     fn set_theme(&mut self, theme: Theme) {
         self.app.overrides.theme = Some(theme.label().to_string());
         self.state
@@ -2134,7 +2241,7 @@ fn help_lines(look: &Look) -> Vec<Line<'static>> {
         .map(|c| {
             Line::from(vec![
                 Span::styled(format!("  {:<name_w$}", c.name), look.accent()),
-                Span::raw(c.desc),
+                Span::raw(c.desc()),
             ])
         })
         .collect();

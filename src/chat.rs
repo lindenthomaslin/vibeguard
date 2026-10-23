@@ -206,7 +206,7 @@ impl Entry {
                 let mut out = Vec::new();
                 if !reasoning.trim().is_empty() {
                     out.push(Line::styled(
-                        format!("{} 思考过程", g.thinking),
+                        format!("{} {}", g.thinking, crate::i18n::t("思考过程", "thinking")),
                         dim.add_modifier(Modifier::ITALIC),
                     ));
                     for row in wrap(reasoning.trim_end(), body_w) {

@@ -254,6 +254,7 @@ In the history panel (`/sessions`, `/search`):
 | `workspace_root` | unset | Confines tool paths |
 | `theme` | `dark` | `dark` / `light` |
 | `font_style` | `default` | `default` / `anime` |
+| `lang` | `en` | `en` / `zh` — interface language; `/lang zh` switches at runtime |
 
 ---
 

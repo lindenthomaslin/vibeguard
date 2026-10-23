@@ -60,6 +60,17 @@ pub const SYSTEM_PROMPT: &str = "你是 VibeGuard，一名专注于应用安全�
 用户的代码多由 AI 生成（vibe coding），常见问题包括硬编码密钥、注入、鉴权缺失、不安全的默认配置等。\
 回答要具体、可操作：指出问题所在、说明风险、给出修复后的代码。默认使用用户提问的语言回答。";
 
+pub const SYSTEM_PROMPT_EN: &str = "You are VibeGuard, a code-audit assistant focused on \
+application security. The user's code is mostly written by AI (vibe coding); the recurring \
+problems are hardcoded secrets, injection, missing authorization and unsafe defaults. Be \
+concrete and actionable: point at the code, explain the risk, and give the fixed code. Reply in \
+the language the user writes in; if their message is language-neutral, reply in English.";
+
+/// 系统提示词：跟着界面语言走
+pub fn system_prompt() -> &'static str {
+    crate::i18n::t(SYSTEM_PROMPT, SYSTEM_PROMPT_EN)
+}
+
 const HELP: &[(&str, &str)] = &[
     ("/help", "显示帮助"),
     ("/config [show|init]", "查看配置 / 运行配置向导"),
@@ -152,7 +163,7 @@ pub async fn run(app: &mut App) -> Result<()> {
         let Some(c) = client.as_ref() else { continue };
 
         let mut messages = Vec::with_capacity(history.len() + 2);
-        let system = format!("{SYSTEM_PROMPT}{}", mode.instruction());
+        let system = format!("{}{}", system_prompt(), mode.instruction());
         messages.push(Message::system(&system));
         messages.extend(history.iter().cloned());
         messages.push(Message::user(input));

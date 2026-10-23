@@ -7,6 +7,7 @@ mod config;
 mod editor;
 mod finding;
 mod graphics;
+mod i18n;
 mod icon;
 mod input;
 mod llm;
@@ -121,6 +122,8 @@ async fn run(cli: Cli) -> Result<()> {
         font_style: None,
     };
     let mut app = App::load(path, overrides)?;
+    // 界面语言：配置里默认 en，这里立刻生效，后面所有文案都跟着它
+    i18n::set(i18n::Lang::parse(&app.effective().lang).unwrap_or_default());
 
     match cli.command {
         // 交互式终端进入全屏界面；管道、重定向等非终端环境退化为按行读取

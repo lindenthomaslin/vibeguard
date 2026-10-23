@@ -13,6 +13,37 @@ use crate::review::{Decision, Reviewer};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// 输入 `/` 时弹出的命令菜单
+impl Candidate {
+    /// 命令说明。英文模式下走下面这张表——中文原文留在 `desc` 里，
+    /// 中文界面直接用，不用维护两份结构。
+    pub fn desc(&self) -> &'static str {
+        if crate::i18n::is_zh() {
+            return self.desc;
+        }
+        match self.name {
+            "/model" => "Configure endpoint, API key, model and thinking effort",
+            "/mode" => "Switch work mode: plan / confirm / auto",
+            "/lang" => "Interface language: English (default) / Chinese",
+            "/scan" => "Scan a directory with local rules; --ai adds model judgement",
+            "/fix" => "Generate fixes for scan findings, apply after you approve",
+            "/report" => "Export the last scan as .md + .json",
+            "/theme" => "Colour theme: dark / light (Ctrl-T)",
+            "/font" => "Glyph style: default / anime",
+            "/permissions" => "Permission mode and workspace root",
+            "/resume" => "Resume the previous conversation",
+            "/sessions" => "History: search, open, delete",
+            "/search" => "Open history with a query: /search <keyword>",
+            "/clear" => "Start a new conversation (the old one is kept)",
+            "/thinking" => "Show or change thinking effort (this session)",
+            "/config" => "Show or change configuration",
+            "/help" => "Show help",
+            "/demo" => "Preview the scan and fix screens with sample data",
+            "/exit" => "Quit",
+            _ => self.desc,
+        }
+    }
+}
+
 pub const COMMANDS: &[Candidate] = &[
     Candidate {
         name: "/model",
@@ -21,6 +52,10 @@ pub const COMMANDS: &[Candidate] = &[
     Candidate {
         name: "/mode",
         desc: "切换工作模式：计划 / 逐条确认 / 全自动",
+    },
+    Candidate {
+        name: "/lang",
+        desc: "界面语言：英文（默认）/ 中文",
     },
     Candidate {
         name: "/scan",
@@ -84,9 +119,26 @@ pub const COMMANDS: &[Candidate] = &[
     },
 ];
 
-const REVIEW_HINT: &str = "↑↓ 选择 · Enter 确认 · y 应用 · n 跳过 · a 全部应用 · q 结束";
-const SESSIONS_HINT: &str = "输入过滤 · ↑↓ 选择 · Enter 打开 · Del 删除 · Esc 关闭";
-const CONFIRM_HINT: &str = "↑↓ 选择 · Enter 确认 · y 应用 · n 跳过 · a 本次全部应用 · Esc 跳过";
+fn review_hint() -> &'static str {
+    crate::i18n::t(
+        "↑↓ 选择 · Enter 确认 · y 应用 · n 跳过 · a 全部应用 · q 结束",
+        "↑↓ select · Enter confirm · y apply · n skip · a apply all · q quit",
+    )
+}
+
+fn sessions_hint() -> &'static str {
+    crate::i18n::t(
+        "输入过滤 · ↑↓ 选择 · Enter 打开 · Del 删除 · Esc 关闭",
+        "type to filter · ↑↓ select · Enter open · Del delete · Esc close",
+    )
+}
+
+fn confirm_hint() -> &'static str {
+    crate::i18n::t(
+        "↑↓ 选择 · Enter 确认 · y 应用 · n 跳过 · a 本次全部应用 · Esc 跳过",
+        "↑↓ select · Enter confirm · y apply · n skip · a apply all · Esc skip",
+    )
+}
 
 /// 按键处理后，主循环需要执行的动作
 #[derive(Debug, PartialEq, Eq)]
@@ -299,10 +351,10 @@ impl AppState {
             return None;
         }
         Some(Choice {
-            title: "命令".into(),
+            title: crate::i18n::t("命令", "Commands").into(),
             items: matches
                 .iter()
-                .map(|c| (c.name.to_string(), c.desc.to_string()))
+                .map(|c| (c.name.to_string(), c.desc().to_string()))
                 .collect(),
             selected: self.editor.menu_selected(),
         })
@@ -648,13 +700,13 @@ impl AppState {
     /// 当前模式专属的快捷键提示；没有则用默认提示
     pub fn hint(&self) -> Option<&'static str> {
         if self.confirm.is_some() {
-            return Some(CONFIRM_HINT);
+            return Some(confirm_hint());
         }
         if self.review.is_some() {
-            return Some(REVIEW_HINT);
+            return Some(review_hint());
         }
         if self.sessions.is_some() {
-            return Some(SESSIONS_HINT);
+            return Some(sessions_hint());
         }
         self.form.as_ref().map(ModelForm::hint)
     }
@@ -947,7 +999,7 @@ mod tests {
         let mut app = AppState::new();
         app.open_sessions(session_items(), "");
         assert!(app.sessions.is_some());
-        assert_eq!(app.hint(), Some(SESSIONS_HINT));
+        assert_eq!(app.hint(), Some(sessions_hint()));
         assert!(!app.input_active(), "底部输入框让位给面板");
 
         app.on_key(key(KeyCode::Down));
@@ -1241,7 +1293,7 @@ mod tests {
         assert_eq!(c.items.len(), 3);
         assert_eq!(c.items[0].0, "应用");
         assert!(!app.input_active());
-        assert_eq!(app.hint(), Some(CONFIRM_HINT));
+        assert_eq!(app.hint(), Some(confirm_hint()));
         // 改动本身已经摊在对话区里，不用再点开才知道改了什么
         assert!(texts(&app).contains("src/db.py"));
 

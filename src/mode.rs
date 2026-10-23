@@ -30,9 +30,9 @@ impl Mode {
 
     pub fn title(self) -> &'static str {
         match self {
-            Mode::Plan => "计划",
-            Mode::Confirm => "逐条确认",
-            Mode::Auto => "全自动",
+            Mode::Plan => crate::i18n::t("计划", "Plan"),
+            Mode::Confirm => crate::i18n::t("逐条确认", "Confirm"),
+            Mode::Auto => crate::i18n::t("全自动", "Auto"),
         }
     }
 
@@ -49,14 +49,41 @@ impl Mode {
     /// 一句话说明，切换模式时写进对话区
     pub fn describe(self) -> &'static str {
         match self {
-            Mode::Plan => "只读分析，产出漏洞报告，不改文件",
-            Mode::Confirm => "每改一处都先确认",
-            Mode::Auto => "不打断，一路做完",
+            Mode::Plan => crate::i18n::t(
+                "只读分析，产出漏洞报告，不改文件",
+                "Read-only analysis: produce a report, touch nothing",
+            ),
+            Mode::Confirm => crate::i18n::t("每改一处都先确认", "Ask before every single change"),
+            Mode::Auto => crate::i18n::t("不打断，一路做完", "Work straight through"),
         }
     }
 
     /// 追加到系统提示词末尾的行为约定
     pub fn instruction(self) -> &'static str {
+        if !crate::i18n::is_zh() {
+            return match self {
+                Mode::Plan => {
+                    "\n\n[Mode: plan] Read-only analysis. Do not call edit_file / write_file.\n\
+                     Locate code with `run_command` (rg, git log/diff) rather than reading files\
+                     one by one; use read_file only where you need full context.\n\
+                     Verify a problem actually exists before claiming it — never guess from a\
+                     filename.\n\
+                     Finish with a Markdown vulnerability report: severity, location (file:line),\
+                     what is wrong, the risk, and a fixed code snippet for each item; end with a\
+                     fix order sorted by severity."
+                }
+                Mode::Confirm => {
+                    "\n\n[Mode: confirm] Ask before every change. One change to one file at a\
+                     time, then stop and wait. If the user skips a change, note it and move on —\
+                     do not resubmit the same change worded differently."
+                }
+                Mode::Auto => {
+                    "\n\n[Mode: auto] Make the changes directly, no approval needed. Work from\
+                     highest severity down, keep every change small and verifiable, and summarise\
+                     what you changed when you are done."
+                }
+            };
+        }
         match self {
             Mode::Plan => {
                 "\n\n【当前模式：计划】只读分析，不要调用 edit_file / write_file 修改任何文件。\

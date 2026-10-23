@@ -63,7 +63,13 @@ pub fn finding_card(
         }
     }
     if !f.suggestion.is_empty() {
-        for row in wrap(&format!("建议：{}", f.suggestion), body_w) {
+        for row in wrap(
+            &crate::i18n::pick(
+                format!("建议：{}", f.suggestion),
+                format!("Fix: {}", f.suggestion),
+            ),
+            body_w,
+        ) {
             out.push(Line::styled(format!("  {row}"), look.success()));
         }
     }
@@ -78,16 +84,16 @@ pub fn summary_lines(findings: &[Finding], look: &Look) -> Vec<Line<'static>> {
                 format!("{} ", look.glyphs.success),
                 look.success().add_modifier(Modifier::BOLD),
             ),
-            Span::raw("未发现安全问题"),
+            Span::raw(crate::i18n::t("未发现安全问题", "No security issues found")),
         ])];
     }
     let c = counts(findings);
     let max = c.iter().map(|&(_, n)| n).max().unwrap_or(1).max(1);
     let mut out = vec![Line::from(vec![
         Span::styled(format!("{} ", look.glyphs.info), look.accent()),
-        Span::raw("共发现 "),
+        Span::raw(crate::i18n::t("共发现 ", "Found ")),
         Span::styled(findings.len().to_string(), BOLD),
-        Span::raw(" 个问题"),
+        Span::raw(crate::i18n::t(" 个问题", " issues")),
     ])];
     for (sev, n) in c.into_iter().filter(|&(_, n)| n > 0) {
         let st = severity_style(sev, look);
@@ -116,19 +122,27 @@ pub fn report_lines(report: &crate::scan::LocalReport, look: &Look) -> Vec<Line<
 
     let mut out = vec![Line::from(vec![
         Span::styled(format!("{} ", look.glyphs.info), look.accent()),
-        Span::raw("扫描了 "),
+        Span::raw(crate::i18n::t("扫描了 ", "Scanned ")),
         Span::styled(files_scanned.to_string(), BOLD),
-        Span::raw(" 个文件，"),
+        Span::raw(crate::i18n::t(" 个文件，", " files, ")),
         Span::styled(files_with_hits.to_string(), BOLD),
-        Span::raw(" 个有问题"),
+        Span::raw(crate::i18n::t(" 个有问题", " with findings")),
         Span::styled(
-            format!("（跳过 {files_skipped} 个：非文本、超大或已标注忽略）"),
+            crate::i18n::pick(
+                format!("（跳过 {files_skipped} 个：非文本、超大或已标注忽略）"),
+                format!(" (skipped {files_skipped}: binary, oversized or marked ignored)"),
+            ),
             look.muted(),
         ),
     ])];
     out.push(Line::styled(
-        format!(
-            "  本地规则覆盖清单里的 {rules}/{checklist_total} 条；其余需要模型做语义判断，这一轮还没跑"
+        crate::i18n::pick(
+            format!(
+                "  本地规则覆盖清单里的 {rules}/{checklist_total} 条；其余需要模型做语义判断，这一轮还没跑"
+            ),
+            format!(
+                "  Local rules cover {rules}/{checklist_total} checklist items; the rest need the model"
+            ),
         ),
         look.muted(),
     ));
@@ -167,14 +181,20 @@ pub fn report_lines(report: &crate::scan::LocalReport, look: &Look) -> Vec<Line<
         }
         if sorted.len() > MAX_LISTED {
             out.push(Line::styled(
-                format!("  … 还有 {} 条未列出", sorted.len() - MAX_LISTED),
+                crate::i18n::pick(
+                    format!("  … 还有 {} 条未列出", sorted.len() - MAX_LISTED),
+                    format!("  … {} more not listed", sorted.len() - MAX_LISTED),
+                ),
                 look.muted(),
             ));
         }
     }
     if *truncated {
         out.push(Line::styled(
-            "  结果超过上限，已截断（先修掉手头这些，或调大 MAX_FINDINGS）",
+            crate::i18n::t(
+                "  结果超过上限，已截断（先修掉手头这些，或调大 MAX_FINDINGS）",
+                "  Results truncated at the cap (fix these first, or raise MAX_FINDINGS)",
+            ),
             look.warn(),
         ));
     }
@@ -201,14 +221,26 @@ pub fn ai_lines(
 
     let mut out = vec![Line::from(vec![
         Span::styled(format!("{} ", look.glyphs.thinking), look.accent()),
-        Span::raw("模型判定了 "),
+        Span::raw(crate::i18n::t("模型判定了 ", "The model judged ")),
         Span::styled(judgements.len().to_string(), BOLD),
-        Span::raw(" 条清单："),
-        Span::styled(format!("存在 {exists}"), look.error()),
-        Span::raw(" · "),
-        Span::styled(format!("疑似 {suspected}"), look.warn()),
+        Span::raw(crate::i18n::t(" 条清单：", " items: ")),
         Span::styled(
-            format!(" · 不存在 {not_found} · 无法判断 {undetermined}"),
+            crate::i18n::pick(format!("存在 {exists}"), format!("{exists} exists")),
+            look.error(),
+        ),
+        Span::raw(" · "),
+        Span::styled(
+            crate::i18n::pick(
+                format!("疑似 {suspected}"),
+                format!("{suspected} suspected"),
+            ),
+            look.warn(),
+        ),
+        Span::styled(
+            crate::i18n::pick(
+                format!(" · 不存在 {not_found} · 无法判断 {undetermined}"),
+                format!(" · {not_found} not found · {undetermined} undetermined"),
+            ),
             look.muted(),
         ),
     ])];
@@ -241,12 +273,23 @@ pub fn ai_lines(
     }
     if undetermined > 0 {
         out.push(Line::styled(
-            format!("  {undetermined} 条静态看不出来——它们要跑起来发请求才能验，别当成「没问题」"),
+            crate::i18n::pick(
+                format!(
+                    "  {undetermined} 条静态看不出来——它们要跑起来发请求才能验，别当成「没问题」"
+                ),
+                format!("  {undetermined} cannot be decided statically — they need a running service, so do not read them as clean"),
+            ),
             look.muted(),
         ));
     }
     for f in failed {
-        out.push(Line::styled(format!("  有一批没跑成功：{f}"), look.error()));
+        out.push(Line::styled(
+            crate::i18n::pick(
+                format!("  有一批没跑成功：{f}"),
+                format!("  A batch failed: {f}"),
+            ),
+            look.error(),
+        ));
     }
     out
 }
@@ -274,7 +317,10 @@ pub fn diff_lines(fix: &Fix, context: usize, width: usize, look: &Look) -> Vec<L
         Span::styled(format!("-{removed}"), look.error()),
     ])];
     if added == 0 && removed == 0 {
-        out.push(Line::styled("  （无改动）", look.muted()));
+        out.push(Line::styled(
+            crate::i18n::t("  （无改动）", "  (no changes)"),
+            look.muted(),
+        ));
         return out;
     }
 

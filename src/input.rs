@@ -111,7 +111,7 @@ pub fn frame(ed: &Editor, width: usize, show_menu: bool) -> Frame {
             let end = (start + MENU_ROWS).min(matches.len());
             let name_w = matches.iter().map(|c| c.name.len()).max().unwrap_or(0) + 2;
             for (i, c) in matches.iter().enumerate().take(end).skip(start) {
-                let line = format!("  {:<name_w$}{}", c.name, c.desc);
+                let line = format!("  {:<name_w$}{}", c.name, c.desc());
                 let line = truncate_str(&line, width, "…").to_string();
                 lines.push(if i == sel {
                     style(line).cyan().bold().to_string()

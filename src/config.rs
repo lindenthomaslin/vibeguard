@@ -31,6 +31,7 @@ pub const KEYS: &[&str] = &[
     "workspace_root",
     "theme",
     "font_style",
+    "lang",
 ];
 
 /// 默认的工具轮数上限：一个真实的多步任务（读文件 → 改 → 跑测试）二三十轮很常见，
@@ -148,6 +149,8 @@ pub struct Config {
     pub theme: String,
     /// 字体风格：default / anime
     pub font_style: String,
+    /// 界面语言：en（默认）/ zh
+    pub lang: String,
 
     #[serde(skip)]
     pub key_source: KeySource,
@@ -168,6 +171,7 @@ impl Default for Config {
             workspace_root: None,
             theme: "dark".to_string(),
             font_style: "default".to_string(),
+            lang: "en".to_string(),
             key_source: KeySource::Unset,
         }
     }
@@ -329,6 +333,7 @@ impl Config {
                 .map_or_else(|| "default".to_string(), |p| p.display().to_string()),
             "theme" => self.theme.clone(),
             "font_style" => self.font_style.clone(),
+            "lang" => self.lang.clone(),
             _ => bail!("未知配置项 `{key}`，可选：{}", KEYS.join(", ")),
         })
     }
@@ -413,6 +418,12 @@ impl Config {
                     bail!("font_style 可选值为 default / anime，收到 `{v}`");
                 }
             }
+            "lang" => {
+                let Some(lang) = crate::i18n::Lang::parse(v) else {
+                    bail!("lang 可选值为 en / zh，收到 `{v}`");
+                };
+                self.lang = lang.code().to_string();
+            }
             _ => bail!("未知配置项 `{key}`，可选：{}", KEYS.join(", ")),
         }
         Ok(())
@@ -437,6 +448,7 @@ impl Config {
             "workspace_root" => self.workspace_root = d.workspace_root,
             "theme" => self.theme = d.theme,
             "font_style" => self.font_style = d.font_style,
+            "lang" => self.lang = d.lang,
             _ => bail!("未知配置项 `{key}`，可选：{}", KEYS.join(", ")),
         }
         Ok(())

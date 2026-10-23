@@ -87,7 +87,12 @@ pub fn banner(cfg: &Config) {
             style("✻").fg(accent()).bold(),
             style(format!("VibeGuard v{}", env!("CARGO_PKG_VERSION"))).bold()
         ),
-        style("AI 生成代码的安全扫描与修复").dim().to_string(),
+        style(crate::i18n::t(
+            "AI 生成代码的安全扫描与修复",
+            "Security review for AI-written code",
+        ))
+        .dim()
+        .to_string(),
         String::new(),
         format!(
             "{} {} · thinking {}",

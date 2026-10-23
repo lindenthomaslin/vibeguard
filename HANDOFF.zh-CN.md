@@ -225,6 +225,7 @@ confirm 那个握手是这段代码里最值得看的地方：`start_chat` 发�
 | `workspace_root` | 不设 | 限定工具能碰的路径 |
 | `theme` | `dark` | `dark` / `light` |
 | `font_style` | `default` | `default` / `anime` |
+| `lang` | `en` | `en` / `zh`——界面语言，`/lang zh` 运行时切换 |
 
 ---
 
