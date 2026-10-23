@@ -85,6 +85,28 @@ pub struct Batch {
     pub items: Vec<VulnItem>,
 }
 
+impl Batch {
+    /// 对半拆开。输出被截断时用它重试——比猜「max_tokens 该给多少」可靠。
+    pub fn split(self) -> Option<(Batch, Batch)> {
+        if self.items.len() < 2 {
+            return None;
+        }
+        let mid = self.items.len() / 2;
+        let mut items = self.items;
+        let right = items.split_off(mid);
+        Some((
+            Batch {
+                label: format!("{}（前半）", self.label),
+                items,
+            },
+            Batch {
+                label: format!("{}（后半）", self.label),
+                items: right,
+            },
+        ))
+    }
+}
+
 /// 按分类顺序把条目装进若干批，每批不超过 `BATCH` 条。
 /// 跨分类装批是为了少发请求——真模型一次要十几秒，按 19 个分类发就是五分钟。
 /// 指定批大小的版本：增量扫描时摘要小，可以一次判更多条
