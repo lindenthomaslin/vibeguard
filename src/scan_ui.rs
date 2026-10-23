@@ -234,7 +234,10 @@ pub fn ai_lines(
             Span::styled(format!("  {} ", j.verdict.label()), style),
             Span::styled(j.id.clone(), BOLD),
             Span::raw("  "),
-            Span::styled(j.evidence.clone(), Style::new().add_modifier(Modifier::UNDERLINED)),
+            Span::styled(
+                j.evidence.clone(),
+                Style::new().add_modifier(Modifier::UNDERLINED),
+            ),
             Span::raw("  "),
             Span::styled(j.reason.clone(), look.muted()),
         ]));
@@ -337,7 +340,13 @@ mod tests {
 
     #[test]
     fn card_shows_id_location_and_fits_width() {
-        let lines = plain(&finding_card(&finding("VG-001", Severity::High), 1, 3, 40, &Look::default()));
+        let lines = plain(&finding_card(
+            &finding("VG-001", Severity::High),
+            1,
+            3,
+            40,
+            &Look::default(),
+        ));
         assert!(lines[0].contains("[高危]") && lines[0].contains("VG-001"));
         assert!(lines[0].contains("(1/3)"));
         assert!(lines.iter().any(|l| l.contains("src/db.py:42 · CWE-89")));
@@ -392,8 +401,15 @@ mod tests {
 
     #[test]
     fn diff_marks_changes_and_numbers_lines() {
-        let lines = plain(&diff_lines(&fix("a\nb\nc\n", "a\nB\nc\n"), 3, 60, &Look::default()));
-        assert!(lines[0].contains("src/db.py") && lines[0].contains("+1") && lines[0].contains("-1"));
+        let lines = plain(&diff_lines(
+            &fix("a\nb\nc\n", "a\nB\nc\n"),
+            3,
+            60,
+            &Look::default(),
+        ));
+        assert!(
+            lines[0].contains("src/db.py") && lines[0].contains("+1") && lines[0].contains("-1")
+        );
         assert!(lines.iter().any(|l| l.contains("   2      │ - b")));
         assert!(lines.iter().any(|l| l.contains("        2 │ + B")));
         assert!(lines.iter().any(|l| l.contains("   1    1 │   a")));
@@ -417,7 +433,9 @@ mod tests {
     #[test]
     fn diff_collapses_distant_unchanged_regions() {
         let old: String = (1..=30).map(|i| format!("line{i}\n")).collect();
-        let new = old.replace("line1\n", "LINE1\n").replace("line30\n", "LINE30\n");
+        let new = old
+            .replace("line1\n", "LINE1\n")
+            .replace("line30\n", "LINE30\n");
         let lines = plain(&diff_lines(&fix(&old, &new), 1, 60, &Look::default()));
         assert!(lines.iter().any(|l| l.contains('⋯')));
         assert!(!lines.iter().any(|l| l.contains("line15")));

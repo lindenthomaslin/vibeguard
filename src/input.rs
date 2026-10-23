@@ -2,8 +2,8 @@
 //! 编辑逻辑在 `editor.rs`，这里负责换行布局、绘制和按键分发。
 
 use crate::editor::Editor;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use console::{measure_text_width, style, truncate_str};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use unicode_width::UnicodeWidthChar;
 
 /// 文本按显示宽度折行后的结果
@@ -204,8 +204,14 @@ mod tests {
     use crate::editor::Candidate;
 
     const CMDS: &[Candidate] = &[
-        Candidate { name: "/help", desc: "帮助" },
-        Candidate { name: "/clear", desc: "清空" },
+        Candidate {
+            name: "/help",
+            desc: "帮助",
+        },
+        Candidate {
+            name: "/clear",
+            desc: "清空",
+        },
     ];
 
     fn key(code: KeyCode) -> KeyEvent {

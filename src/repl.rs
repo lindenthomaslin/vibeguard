@@ -14,16 +14,46 @@ use std::time::Instant;
 
 /// 输入 `/` 时弹出的命令菜单
 const COMMANDS: &[Candidate] = &[
-    Candidate { name: "/help", desc: "显示帮助" },
-    Candidate { name: "/config", desc: "查看或修改配置" },
-    Candidate { name: "/model", desc: "查看或切换模型" },
-    Candidate { name: "/mode", desc: "切换工作模式：计划 / 逐条确认 / 全自动" },
-    Candidate { name: "/thinking", desc: "查看或切换思考模式" },
-    Candidate { name: "/theme", desc: "切换主题（dark/light）" },
-    Candidate { name: "/font", desc: "切换字体风格（default/anime）" },
-    Candidate { name: "/ping", desc: "测试 API 连接" },
-    Candidate { name: "/clear", desc: "清空对话历史" },
-    Candidate { name: "/exit", desc: "退出" },
+    Candidate {
+        name: "/help",
+        desc: "显示帮助",
+    },
+    Candidate {
+        name: "/config",
+        desc: "查看或修改配置",
+    },
+    Candidate {
+        name: "/model",
+        desc: "查看或切换模型",
+    },
+    Candidate {
+        name: "/mode",
+        desc: "切换工作模式：计划 / 逐条确认 / 全自动",
+    },
+    Candidate {
+        name: "/thinking",
+        desc: "查看或切换思考模式",
+    },
+    Candidate {
+        name: "/theme",
+        desc: "切换主题（dark/light）",
+    },
+    Candidate {
+        name: "/font",
+        desc: "切换字体风格（default/anime）",
+    },
+    Candidate {
+        name: "/ping",
+        desc: "测试 API 连接",
+    },
+    Candidate {
+        name: "/clear",
+        desc: "清空对话历史",
+    },
+    Candidate {
+        name: "/exit",
+        desc: "退出",
+    },
 ];
 
 pub const SYSTEM_PROMPT: &str = "你是 VibeGuard，一名专注于应用安全的代码审计助手。\
@@ -35,7 +65,10 @@ const HELP: &[(&str, &str)] = &[
     ("/config [show|init]", "查看配置 / 运行配置向导"),
     ("/config set <key> [value]", "修改并保存配置项"),
     ("/model [name]", "查看或切换本次会话的模型"),
-    ("/mode [plan|confirm|auto]", "切换工作模式：计划 / 逐条确认 / 全自动"),
+    (
+        "/mode [plan|confirm|auto]",
+        "切换工作模式：计划 / 逐条确认 / 全自动",
+    ),
     (
         "/thinking [mode]",
         "查看或切换思考模式：auto / off / low / high / max",
@@ -93,8 +126,14 @@ pub async fn run(app: &mut App) -> Result<()> {
             if matches!(name, "config" | "model" | "thinking") {
                 client = None;
             }
-            if let Err(e) =
-                slash_command(app, name, &parts[1.min(parts.len())..], &mut history, &mut mode).await
+            if let Err(e) = slash_command(
+                app,
+                name,
+                &parts[1.min(parts.len())..],
+                &mut history,
+                &mut mode,
+            )
+            .await
             {
                 ui::error(&format!("{e:#}"));
             }
@@ -188,7 +227,11 @@ async fn slash_command(
             [name] => match Mode::parse(name) {
                 Some(next) => {
                     *mode = next;
-                    ui::success(&format!("已切换到「{}」模式：{}", mode.title(), mode.describe()));
+                    ui::success(&format!(
+                        "已切换到「{}」模式：{}",
+                        mode.title(),
+                        mode.describe()
+                    ));
                 }
                 None => bail!("模式可选值为 plan / confirm / auto"),
             },

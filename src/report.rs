@@ -110,10 +110,7 @@ pub fn markdown(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> 
                 f.severity.label(),
                 f.title
             ));
-            out.push_str(&format!(
-                "- **位置**：`{}:{}`\n",
-                f.file, f.line
-            ));
+            out.push_str(&format!("- **位置**：`{}:{}`\n", f.file, f.line));
             if let Some(cwe) = &f.cwe {
                 out.push_str(&format!("- **编号**：{} · {}\n", checklist_id(f), cwe));
             } else {
@@ -302,7 +299,10 @@ mod tests {
         assert!(md.contains("不完整"));
         assert!(md.contains("D. 注入类"));
         let v: serde_json::Value = serde_json::from_str(&json(&[], &[], &m)).unwrap();
-        assert_eq!(v["coverage"]["failed_batches"][0], "D. 注入类 等 4 类（超时）");
+        assert_eq!(
+            v["coverage"]["failed_batches"][0],
+            "D. 注入类 等 4 类（超时）"
+        );
     }
 
     #[test]

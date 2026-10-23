@@ -79,7 +79,10 @@ impl Editor {
 
     /// 粘贴：统一换行符，制表符展开为空格
     pub fn insert_str(&mut self, s: &str) {
-        let s = s.replace("\r\n", "\n").replace('\r', "\n").replace('\t', "    ");
+        let s = s
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\t', "    ");
         for c in s.chars() {
             self.insert(c);
         }
@@ -327,9 +330,18 @@ mod tests {
     use super::*;
 
     const CMDS: &[Candidate] = &[
-        Candidate { name: "/config", desc: "配置" },
-        Candidate { name: "/clear", desc: "清空" },
-        Candidate { name: "/help", desc: "帮助" },
+        Candidate {
+            name: "/config",
+            desc: "配置",
+        },
+        Candidate {
+            name: "/clear",
+            desc: "清空",
+        },
+        Candidate {
+            name: "/help",
+            desc: "帮助",
+        },
     ];
 
     fn ed(s: &str) -> Editor {
@@ -484,8 +496,14 @@ mod tests {
     #[test]
     fn an_exact_match_outranks_a_longer_command_that_starts_the_same() {
         const CMDS: &[Candidate] = &[
-            Candidate { name: "/model", desc: "模型" },
-            Candidate { name: "/mode", desc: "模式" },
+            Candidate {
+                name: "/model",
+                desc: "模型",
+            },
+            Candidate {
+                name: "/mode",
+                desc: "模式",
+            },
         ];
         let mut e = Editor::new(CMDS);
         e.insert_str("/mode");

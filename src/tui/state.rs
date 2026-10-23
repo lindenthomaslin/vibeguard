@@ -14,23 +14,74 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// 输入 `/` 时弹出的命令菜单
 pub const COMMANDS: &[Candidate] = &[
-    Candidate { name: "/model", desc: "配置 API 地址、API Key、模型与思考力度" },
-    Candidate { name: "/mode", desc: "切换工作模式：计划 / 逐条确认 / 全自动" },
-    Candidate { name: "/scan", desc: "扫描目录：本地规则；加 --ai 让模型逐条判定（/scan 路径 --ai）" },
-    Candidate { name: "/fix", desc: "为扫描结果生成修复，逐条确认后写入（/fix 数量 或 /fix VG-003）" },
-    Candidate { name: "/report", desc: "把扫描结果导出成 .md + .json（/report 路径）" },
-    Candidate { name: "/theme", desc: "切换配色：dark / light（Ctrl-T）" },
-    Candidate { name: "/font", desc: "切换字形：default / anime" },
-    Candidate { name: "/permissions", desc: "配置权限模式和工作目录" },
-    Candidate { name: "/resume", desc: "恢复上一次对话" },
-    Candidate { name: "/sessions", desc: "历史对话：搜索、打开、删除" },
-    Candidate { name: "/search", desc: "带关键词打开历史对话：/search 关键词" },
-    Candidate { name: "/clear", desc: "开始新对话（旧对话会保留）" },
-    Candidate { name: "/thinking", desc: "查看或切换思考模式（仅本次）" },
-    Candidate { name: "/config", desc: "查看或修改配置" },
-    Candidate { name: "/help", desc: "显示帮助" },
-    Candidate { name: "/demo", desc: "预览扫描与修复界面（示例数据）" },
-    Candidate { name: "/exit", desc: "退出" },
+    Candidate {
+        name: "/model",
+        desc: "配置 API 地址、API Key、模型与思考力度",
+    },
+    Candidate {
+        name: "/mode",
+        desc: "切换工作模式：计划 / 逐条确认 / 全自动",
+    },
+    Candidate {
+        name: "/scan",
+        desc: "扫描目录：本地规则；加 --ai 让模型逐条判定（/scan 路径 --ai）",
+    },
+    Candidate {
+        name: "/fix",
+        desc: "为扫描结果生成修复，逐条确认后写入（/fix 数量 或 /fix VG-003）",
+    },
+    Candidate {
+        name: "/report",
+        desc: "把扫描结果导出成 .md + .json（/report 路径）",
+    },
+    Candidate {
+        name: "/theme",
+        desc: "切换配色：dark / light（Ctrl-T）",
+    },
+    Candidate {
+        name: "/font",
+        desc: "切换字形：default / anime",
+    },
+    Candidate {
+        name: "/permissions",
+        desc: "配置权限模式和工作目录",
+    },
+    Candidate {
+        name: "/resume",
+        desc: "恢复上一次对话",
+    },
+    Candidate {
+        name: "/sessions",
+        desc: "历史对话：搜索、打开、删除",
+    },
+    Candidate {
+        name: "/search",
+        desc: "带关键词打开历史对话：/search 关键词",
+    },
+    Candidate {
+        name: "/clear",
+        desc: "开始新对话（旧对话会保留）",
+    },
+    Candidate {
+        name: "/thinking",
+        desc: "查看或切换思考模式（仅本次）",
+    },
+    Candidate {
+        name: "/config",
+        desc: "查看或修改配置",
+    },
+    Candidate {
+        name: "/help",
+        desc: "显示帮助",
+    },
+    Candidate {
+        name: "/demo",
+        desc: "预览扫描与修复界面（示例数据）",
+    },
+    Candidate {
+        name: "/exit",
+        desc: "退出",
+    },
 ];
 
 const REVIEW_HINT: &str = "↑↓ 选择 · Enter 确认 · y 应用 · n 跳过 · a 全部应用 · q 结束";
@@ -85,7 +136,11 @@ impl Answer {
 const CONFIRM_OPTIONS: [(&str, &str, Answer); 3] = [
     ("应用", "写入这个改动", Answer::Apply),
     ("跳过", "不写入，继续下一个", Answer::Skip),
-    ("本次全部应用", "这次请求里剩下的改动不再询问", Answer::Always),
+    (
+        "本次全部应用",
+        "这次请求里剩下的改动不再询问",
+        Answer::Always,
+    ),
 ];
 
 /// 逐条确认的选项，顺序与 `Decision` 对应
@@ -284,7 +339,10 @@ impl AppState {
             self.push(Entry::Info("没有可确认的修复".into()));
             return;
         }
-        self.review = Some(ReviewState { reviewer, selected: 0 });
+        self.review = Some(ReviewState {
+            reviewer,
+            selected: 0,
+        });
         self.show_current_review();
     }
 
@@ -408,9 +466,11 @@ impl AppState {
                 }
                 match text.strip_prefix('/') {
                     Some(cmd) => {
-                        let parts: Vec<String> =
-                            cmd.split_whitespace().map(String::from).collect();
-                        if matches!(parts.first().map(String::as_str), Some("exit" | "quit" | "q")) {
+                        let parts: Vec<String> = cmd.split_whitespace().map(String::from).collect();
+                        if matches!(
+                            parts.first().map(String::as_str),
+                            Some("exit" | "quit" | "q")
+                        ) {
                             return Action::Quit;
                         }
                         Action::Command(parts)
@@ -446,12 +506,10 @@ impl AppState {
         let n = CONFIRM_OPTIONS.len();
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => c.selected = (c.selected + n - 1) % n,
-            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
-                c.selected = (c.selected + 1) % n
-            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => c.selected = (c.selected + 1) % n,
             KeyCode::Char('y') => return Action::Answer(Answer::Apply),
             KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                return Action::Answer(Answer::Skip)
+                return Action::Answer(Answer::Skip);
             }
             KeyCode::Char('a') => return Action::Answer(Answer::Always),
             KeyCode::Char('c') if ctrl => return Action::Answer(Answer::Skip),
@@ -480,7 +538,7 @@ impl AppState {
                 return self.answer_review(decision);
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                return self.answer_review(Decision::Quit)
+                return self.answer_review(Decision::Quit);
             }
             _ => {}
         }
@@ -621,7 +679,9 @@ impl AppState {
 /// 演示：用示例数据走一遍扫描与修复界面
 pub fn start_demo(app: &mut AppState) {
     let (findings, fixes) = review::demo_data();
-    app.push(Entry::Warn("演示模式：以下是示例数据，不会读取或修改任何文件".into()));
+    app.push(Entry::Warn(
+        "演示模式：以下是示例数据，不会读取或修改任何文件".into(),
+    ));
     app.start_review(&findings, &fixes, Some("演示数据".into()));
 }
 
@@ -911,7 +971,11 @@ mod tests {
     fn deleting_a_session_takes_two_presses_and_leaves_the_panel_open() {
         let mut app = AppState::new();
         app.open_sessions(session_items(), "");
-        assert_eq!(app.on_key(key(KeyCode::Delete)), Action::None, "第一次只是问一句");
+        assert_eq!(
+            app.on_key(key(KeyCode::Delete)),
+            Action::None,
+            "第一次只是问一句"
+        );
         assert_eq!(
             app.on_key(key(KeyCode::Delete)),
             Action::DeleteSession("s1".into())
@@ -950,7 +1014,11 @@ mod tests {
         let (chars, cursor) = app.input();
         assert_eq!(chars.iter().collect::<String>(), "sk-abc");
         assert_eq!(cursor, 6);
-        assert_eq!(app.choice().unwrap().items[1].1, "sk-abc", "the key is shown in plain text");
+        assert_eq!(
+            app.choice().unwrap().items[1].1,
+            "sk-abc",
+            "the key is shown in plain text"
+        );
     }
 
     #[test]
@@ -1080,7 +1148,11 @@ mod tests {
     fn a_demo_review_never_asks_to_write_files() {
         let mut app = AppState::new();
         start_demo(&mut app);
-        assert_eq!(app.on_key(key(KeyCode::Char('a'))), Action::None, "演示数据不能落盘");
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('a'))),
+            Action::None,
+            "演示数据不能落盘"
+        );
         assert!(texts(&app).contains("演示模式"));
     }
 
@@ -1161,9 +1233,18 @@ mod tests {
         // 改动本身已经摊在对话区里，不用再点开才知道改了什么
         assert!(texts(&app).contains("src/db.py"));
 
-        assert_eq!(app.on_key(key(KeyCode::Char('y'))), Action::Answer(Answer::Apply));
-        assert_eq!(app.on_key(key(KeyCode::Char('n'))), Action::Answer(Answer::Skip));
-        assert_eq!(app.on_key(key(KeyCode::Char('a'))), Action::Answer(Answer::Always));
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('y'))),
+            Action::Answer(Answer::Apply)
+        );
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('n'))),
+            Action::Answer(Answer::Skip)
+        );
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('a'))),
+            Action::Answer(Answer::Always)
+        );
         assert_eq!(app.on_key(key(KeyCode::Esc)), Action::Answer(Answer::Skip));
     }
 

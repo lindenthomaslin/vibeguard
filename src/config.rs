@@ -3,6 +3,7 @@
 //! 优先级：命令行参数 > 环境变量 > 配置文件 > 默认值。
 //! 环境变量只作用于“生效配置”，永远不会被写回配置文件。
 
+use crate::tools::PermissionMode;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -10,7 +11,6 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use crate::tools::PermissionMode;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 pub const DEFAULT_MODEL: &str = "deepseek-flash";

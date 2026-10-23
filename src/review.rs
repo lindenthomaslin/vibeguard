@@ -131,18 +131,19 @@ pub fn review_interactive(findings: &[Finding], fixes: &[Fix]) -> Result<Vec<Fix
 
 /// 演示用的假数据，仅用于预览界面样式
 pub fn demo_data() -> (Vec<Finding>, Vec<Fix>) {
-    let finding = |id: &str, severity, title: &str, cwe: &str, file: &str, line, desc: &str, sug: &str| {
-        Finding {
-            id: id.into(),
-            severity,
-            title: title.into(),
-            cwe: Some(cwe.into()),
-            file: file.into(),
-            line,
-            description: desc.into(),
-            suggestion: sug.into(),
-        }
-    };
+    let finding =
+        |id: &str, severity, title: &str, cwe: &str, file: &str, line, desc: &str, sug: &str| {
+            Finding {
+                id: id.into(),
+                severity,
+                title: title.into(),
+                cwe: Some(cwe.into()),
+                file: file.into(),
+                line,
+                description: desc.into(),
+                suggestion: sug.into(),
+            }
+        };
     let findings = vec![
         finding(
             "VG-001",
@@ -308,7 +309,11 @@ mod tests {
         let (findings, fixes) = demo_data();
         assert_eq!(findings.len(), fixes.len());
         for fix in &fixes {
-            assert!(findings.iter().any(|f| f.id == fix.finding_id && f.file == fix.file));
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.id == fix.finding_id && f.file == fix.file)
+            );
             assert_ne!(fix.old, fix.new);
         }
     }

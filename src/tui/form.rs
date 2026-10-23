@@ -186,7 +186,11 @@ impl ModelForm {
     pub fn choice(&self) -> Choice {
         let text = |ed: &Editor| {
             let t = ed.text();
-            if t.is_empty() { "（未设置）".to_string() } else { t }
+            if t.is_empty() {
+                "（未设置）".to_string()
+            } else {
+                t
+            }
         };
         Choice {
             title: "模型配置".into(),
@@ -256,7 +260,10 @@ impl ModelForm {
     fn validate(&self) -> Result<ModelSettings, (usize, String)> {
         let url = self.base_url.text().trim().to_string();
         if url.is_empty() {
-            return Err((F_URL, format!("API 地址不能为空，默认是 {DEFAULT_BASE_URL}")));
+            return Err((
+                F_URL,
+                format!("API 地址不能为空，默认是 {DEFAULT_BASE_URL}"),
+            ));
         }
         if url.chars().any(char::is_whitespace) {
             return Err((F_URL, "API 地址不能包含空白字符".into()));
@@ -266,7 +273,10 @@ impl ModelForm {
         }
         let key = self.api_key.text().trim().to_string();
         if key.chars().any(char::is_whitespace) {
-            return Err((F_KEY, "API Key 不能包含空白字符，请检查是否多复制了内容".into()));
+            return Err((
+                F_KEY,
+                "API Key 不能包含空白字符，请检查是否多复制了内容".into(),
+            ));
         }
         let model = self.model.text().trim().to_string();
         if model.is_empty() {
@@ -464,7 +474,11 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(f.focus, F_URL);
-        assert_eq!(text(&f), "ftp://nope.example", "the text is kept for fixing");
+        assert_eq!(
+            text(&f),
+            "ftp://nope.example",
+            "the text is kept for fixing"
+        );
     }
 
     #[test]
@@ -472,7 +486,9 @@ mod tests {
         let mut f = ModelForm::new(&settings(Some("k")));
         f.base_url = field("");
         match f.on_key(ctrl('s')) {
-            FormEvent::Invalid(msg) => assert!(msg.contains("不能为空") && msg.contains("deepseek.com")),
+            FormEvent::Invalid(msg) => {
+                assert!(msg.contains("不能为空") && msg.contains("deepseek.com"))
+            }
             other => panic!("{other:?}"),
         }
         assert_eq!(f.focus, F_URL);
@@ -561,9 +577,12 @@ mod tests {
         assert_eq!(next.key_source, KeySource::File);
         assert_eq!(base, Config::default(), "the original config is untouched");
 
-        let none = ModelSettings { api_key: None, ..s.clone() }
-            .applied_to(&next)
-            .unwrap();
+        let none = ModelSettings {
+            api_key: None,
+            ..s.clone()
+        }
+        .applied_to(&next)
+        .unwrap();
         assert_eq!(none.api_key, None);
         assert_eq!(none.key_source, KeySource::Unset);
     }

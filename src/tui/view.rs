@@ -1,17 +1,17 @@
 //! 全屏界面的绘制：把状态画到 ratatui 的 `Frame` 上。
 
 use super::layout::areas;
+use super::sessions::{SessionItem, SessionsPanel};
 use crate::chat::{Scroll, Transcript};
 use crate::mode::Mode;
-use super::sessions::{SessionItem, SessionsPanel};
 use crate::theme::Look;
 use crate::{icon, input};
 use ratatui::Frame;
+use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Padding, Paragraph};
-use ratatui::layout::Alignment;
 use ratatui_image::StatefulImage;
 use ratatui_image::protocol::StatefulProtocol;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -164,10 +164,7 @@ fn draw_header(frame: &mut Frame, rect: Rect, p: &mut Props<'_>) {
     let title = format!("VibeGuard v{}", env!("CARGO_PKG_VERSION"));
     if rect.height < icon::AVATAR_ROWS + 2 {
         let line = Line::from(vec![
-            Span::styled(
-                format!("{} ", p.look.glyphs.thinking),
-                p.look.accent_bold(),
-            ),
+            Span::styled(format!("{} ", p.look.glyphs.thinking), p.look.accent_bold()),
             Span::styled(title, Style::new().add_modifier(Modifier::BOLD)),
             Span::styled(
                 format!(" · {} · thinking {}", p.model, p.thinking),
@@ -184,8 +181,8 @@ fn draw_header(frame: &mut Frame, rect: Rect, p: &mut Props<'_>) {
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
-    let icon_rect = Rect::new(inner.x + 1, inner.y, icon::AVATAR_COLS, icon::AVATAR_ROWS)
-        .intersection(inner);
+    let icon_rect =
+        Rect::new(inner.x + 1, inner.y, icon::AVATAR_COLS, icon::AVATAR_ROWS).intersection(inner);
     // 终端支持原生图片就直接贴原图，否则用四分之一方块字符拼
     match p.avatar.as_deref_mut() {
         Some(proto) => frame.render_stateful_widget(StatefulImage::new(), icon_rect, proto),
@@ -193,7 +190,12 @@ fn draw_header(frame: &mut Frame, rect: Rect, p: &mut Props<'_>) {
     }
 
     let text_x = inner.x + 1 + icon::AVATAR_COLS + 2;
-    let text = Rect::new(text_x, inner.y, inner.right().saturating_sub(text_x), inner.height);
+    let text = Rect::new(
+        text_x,
+        inner.y,
+        inner.right().saturating_sub(text_x),
+        inner.height,
+    );
     let muted = p.look.muted();
     let lines = vec![
         Line::styled(title, Style::new().add_modifier(Modifier::BOLD)),
@@ -216,9 +218,7 @@ fn draw_body(frame: &mut Frame, rect: Rect, p: &mut Props<'_>, splash: Option<Sp
     if rect.height == 0 || rect.width == 0 {
         return;
     }
-    let (mut lines, last_start) = p
-        .transcript
-        .lines_marked(rect.width as usize, &p.look);
+    let (mut lines, last_start) = p.transcript.lines_marked(rect.width as usize, &p.look);
     if let Some(msg) = p.busy {
         if !lines.is_empty() {
             lines.push(Line::raw(""));
@@ -380,10 +380,7 @@ fn draw_choice(frame: &mut Frame, rect: Rect, c: &Choice, look: &Look) {
         .map(|(i, (name, desc))| {
             let text = format!("{}{desc}", pad_to(name, name_w));
             if i == c.selected {
-                Line::styled(
-                    format!("{} {text}", look.glyphs.user),
-                    look.accent_bold(),
-                )
+                Line::styled(format!("{} {text}", look.glyphs.user), look.accent_bold())
             } else {
                 Line::styled(format!("  {text}"), look.muted())
             }
@@ -431,11 +428,7 @@ fn draw_sessions(frame: &mut Frame, area: Rect, panel: &SessionsPanel, look: &Lo
         cursor,
         (inner.width.saturating_sub(SEARCH_LABEL_W) as usize).max(2),
     );
-    let row = lay
-        .rows
-        .get(lay.cursor.0)
-        .cloned()
-        .unwrap_or_default();
+    let row = lay.rows.get(lay.cursor.0).cloned().unwrap_or_default();
     let empty = chars.is_empty();
     let mut search = vec![Span::styled(SEARCH_LABEL, look.muted())];
     if empty {
@@ -445,10 +438,7 @@ fn draw_sessions(frame: &mut Frame, area: Rect, panel: &SessionsPanel, look: &Lo
     }
     frame.render_widget(
         Paragraph::new(Line::from(search)),
-        Rect {
-            height: 1,
-            ..inner
-        },
+        Rect { height: 1, ..inner },
     );
 
     let rule = inner.height >= 6;
@@ -486,20 +476,13 @@ fn draw_sessions(frame: &mut Frame, area: Rect, panel: &SessionsPanel, look: &Lo
                 let lead = if on { look.accent_bold() } else { look.muted() };
                 let mut spans = vec![
                     Span::styled(
-                        format!(
-                            "{} ",
-                            if on { look.glyphs.user } else { " " }
-                        ),
+                        format!("{} ", if on { look.glyphs.user } else { " " }),
                         lead,
                     ),
                     Span::styled(pad_to(&item.when, when_w + 2), lead),
                     Span::styled(
                         item.title.clone(),
-                        if on {
-                            look.accent_bold()
-                        } else {
-                            Style::new()
-                        },
+                        if on { look.accent_bold() } else { Style::new() },
                     ),
                     Span::styled(format!(" · {} 轮", item.turns), look.muted()),
                 ];
@@ -539,7 +522,11 @@ fn draw_sessions(frame: &mut Frame, area: Rect, panel: &SessionsPanel, look: &Lo
             look.error(),
         )
     } else if let Some(note) = panel.notice() {
-        let style = if note.error { look.error() } else { look.muted() };
+        let style = if note.error {
+            look.error()
+        } else {
+            look.muted()
+        };
         (note.text.clone(), style)
     } else {
         (
@@ -562,8 +549,8 @@ fn draw_sessions(frame: &mut Frame, area: Rect, panel: &SessionsPanel, look: &Lo
     );
 
     // 光标交给搜索框：它在最前面画，最后设位置才不会被别处覆盖
-    let x = (inner.x + SEARCH_LABEL_W + clamp_u16(lay.cursor.1))
-        .min(inner.right().saturating_sub(1));
+    let x =
+        (inner.x + SEARCH_LABEL_W + clamp_u16(lay.cursor.1)).min(inner.right().saturating_sub(1));
     frame.set_cursor_position((x, inner.y));
 }
 
@@ -606,10 +593,7 @@ fn draw_input(
         .take(inner.height as usize)
         .map(|(i, row)| {
             let lead = if i == 0 {
-                Span::styled(
-                    format!("{} ", look.glyphs.user),
-                    look.accent_bold(),
-                )
+                Span::styled(format!("{} ", look.glyphs.user), look.accent_bold())
             } else {
                 Span::raw("  ")
             };
@@ -725,7 +709,11 @@ mod tests {
         assert!(rows[0].starts_with('┌'));
         assert!(rows.iter().take(6).any(|r| r.contains("VibeGuard v")));
         assert!(rows.iter().take(6).any(|r| r.contains("deepseek-chat")));
-        assert!(rows.iter().take(6).any(|r| r.contains('█') || r.contains('▀')));
+        assert!(
+            rows.iter()
+                .take(6)
+                .any(|r| r.contains('█') || r.contains('▀'))
+        );
         // 状态栏在最后一行，输入框（上边框、文字、下边框）占倒数第 2 到第 4 行
         assert!(rows[26].starts_with('┌'));
         assert!(rows[27].contains('›'));
@@ -744,7 +732,10 @@ mod tests {
         assert!(rows[29].starts_with(" ○ plan "), "{:?}", rows[29]);
         // 宽字符后面的补位格会插进空格，比较前先压掉空白
         assert!(squeeze(&rows[29]).contains("Enter发送"), "{:?}", rows[29]);
-        assert_eq!(term.backend().buffer()[(1, 29)].bg, Look::default().chip(Mode::Plan));
+        assert_eq!(
+            term.backend().buffer()[(1, 29)].bg,
+            Look::default().chip(Mode::Plan)
+        );
 
         fx.mode = Mode::Auto;
         let rows = screen(&fx.render(80, 30));
@@ -760,7 +751,10 @@ mod tests {
         let rows = screen(&fx.render(80, 30));
         assert!(rows[0].starts_with('╭'), "{:?}", rows[0]);
         assert!(rows[28].starts_with('╰'), "{:?}", rows[28]);
-        assert!(rows.iter().any(|r| r.contains("✦ hello")), "信息条目前缀应当换成星星");
+        assert!(
+            rows.iter().any(|r| r.contains("✦ hello")),
+            "信息条目前缀应当换成星星"
+        );
 
         // 默认版还是方角 + 圆点
         let mut fx = Fixture::new();
@@ -780,7 +774,10 @@ mod tests {
         let dark = fx.render(80, 30);
         let dark_bg = dark.backend().buffer()[(1, 29)].bg;
         assert_ne!(light_bg, dark_bg, "两套主题的模式标签不该同色");
-        assert_eq!(light_bg, Look::new(Theme::Light, FontStyle::Default).chip(Mode::Plan));
+        assert_eq!(
+            light_bg,
+            Look::new(Theme::Light, FontStyle::Default).chip(Mode::Plan)
+        );
     }
 
     #[test]
@@ -815,12 +812,18 @@ mod tests {
         let mut fx = Fixture::new();
         fx.choice = Some(Choice {
             title: "commands".into(),
-            items: vec![("/help".into(), "help".into()), ("/exit".into(), "quit".into())],
+            items: vec![
+                ("/help".into(), "help".into()),
+                ("/exit".into(), "quit".into()),
+            ],
             selected: 1,
         });
         let rows = screen(&fx.render(80, 30));
         assert!(rows.iter().any(|r| r.contains("commands")));
-        assert!(rows.iter().any(|r| r.contains("  /help") && r.contains("help")));
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("  /help") && r.contains("help"))
+        );
         assert!(rows.iter().any(|r| r.contains("› /exit")));
         // 输入框仍然在最底部
         assert!(rows[27].contains('›'));
@@ -831,7 +834,9 @@ mod tests {
         let mut fx = Fixture::new();
         fx.choice = Some(Choice {
             title: "t".into(),
-            items: (0..30).map(|i| (format!("item{i}"), String::new())).collect(),
+            items: (0..30)
+                .map(|i| (format!("item{i}"), String::new()))
+                .collect(),
             selected: 29,
         });
         let rows = screen(&fx.render(80, 30));
@@ -848,7 +853,10 @@ mod tests {
         let pos = term.get_cursor_position().unwrap();
         // 左边框 1 列 + 内边距 1 列 + 前缀 "› " 2 列 + 已输入 5 列
         assert_eq!((pos.x, pos.y), (1 + 1 + 2 + 5, 27));
-        assert!(rows[27].starts_with("│ ›"), "prompt should not touch the border");
+        assert!(
+            rows[27].starts_with("│ ›"),
+            "prompt should not touch the border"
+        );
     }
 
     #[test]
@@ -897,7 +905,10 @@ mod tests {
     fn review_keeps_the_top_of_a_tall_card_visible() {
         // 22 行：图标栏收成 1 行后对话区只有 11 行，比卡片（12 行）矮
         let rows = screen(&review_fixture(true).render(80, 22));
-        assert!(rows.iter().any(|r| r.contains("VG-001") && r.contains("(1/3)")));
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("VG-001") && r.contains("(1/3)"))
+        );
         assert!(rows[0].contains("VibeGuard") && !rows[0].starts_with('┌'));
         // 输入框依然固定在底部
         assert!(rows[18].starts_with('┌') && rows[19].contains('›') && rows[20].starts_with('└'));
@@ -937,7 +948,11 @@ mod tests {
         assert!(!rows[26].contains('['), "no label expected: {:?}", rows[26]);
         assert!(rows[26].starts_with('┌'));
         let pos = term.get_cursor_position().unwrap();
-        assert_eq!((pos.x, pos.y), (0, 0), "no cursor is placed while the input is inactive");
+        assert_eq!(
+            (pos.x, pos.y),
+            (0, 0),
+            "no cursor is placed while the input is inactive"
+        );
     }
 
     #[test]
@@ -985,7 +1000,25 @@ mod tests {
     /// 四分之一方块字形：字符画版本里只会有这些字，用来判断某一行是不是图
     fn art_cells(row: &str) -> usize {
         row.chars()
-            .filter(|c| matches!(c, '▘' | '▝' | '▀' | '▖' | '▌' | '▞' | '▛' | '▗' | '▚' | '▐' | '▜' | '▄' | '▙' | '▟' | '█'))
+            .filter(|c| {
+                matches!(
+                    c,
+                    '▘' | '▝'
+                        | '▀'
+                        | '▖'
+                        | '▌'
+                        | '▞'
+                        | '▛'
+                        | '▗'
+                        | '▚'
+                        | '▐'
+                        | '▜'
+                        | '▄'
+                        | '▙'
+                        | '▟'
+                        | '█'
+                )
+            })
             .count()
     }
 
@@ -1005,7 +1038,12 @@ mod tests {
             .filter(|(_, r)| art_cells(r) > 0)
             .map(|(i, _)| i)
             .collect();
-        assert_eq!(art.len(), icon::AVATAR_ROWS as usize, "徽标只占 {} 行", icon::AVATAR_ROWS);
+        assert_eq!(
+            art.len(),
+            icon::AVATAR_ROWS as usize,
+            "徽标只占 {} 行",
+            icon::AVATAR_ROWS
+        );
 
         let squeeze = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
         let name = body_rows
@@ -1047,7 +1085,11 @@ mod tests {
         let painted: Vec<usize> = (body.y as usize..body.bottom() as usize)
             .filter(|y| art_cells(&rows[*y]) > 0)
             .collect();
-        assert_eq!(painted.len(), art_rows as usize, "字符画应当占 {art_rows} 行");
+        assert_eq!(
+            painted.len(),
+            art_rows as usize,
+            "字符画应当占 {art_rows} 行"
+        );
         assert!(
             painted.windows(2).all(|w| w[1] == w[0] + 1),
             "字符画中间不能断行"
@@ -1058,12 +1100,19 @@ mod tests {
         let left = row.chars().take_while(|c| *c == ' ').count();
         let right = row.chars().rev().take_while(|c| *c == ' ').count();
         assert_eq!(art_cells(row), cols as usize, "字符画应当铺满 {cols} 列");
-        assert!(left.abs_diff(right) <= 1, "字符画应当水平居中：左 {left} 右 {right}");
+        assert!(
+            left.abs_diff(right) <= 1,
+            "字符画应当水平居中：左 {left} 右 {right}"
+        );
 
         // 图下面跟一行说明，不再重复品牌名
         let squeeze = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
         let cap = painted[painted.len() - 1] + 1;
-        assert!(squeeze(&rows[cap]).contains("AI生成代码"), "{:?}", rows[cap]);
+        assert!(
+            squeeze(&rows[cap]).contains("AI生成代码"),
+            "{:?}",
+            rows[cap]
+        );
         assert!(
             !rows.iter().any(|r| squeeze(r) == "vibeguard"),
             "字符画里已经有手写的品牌名了"
@@ -1106,7 +1155,10 @@ mod tests {
         fx.transcript.push(Entry::Info("hello".into()));
         let rows = screen(&fx.render(80, 24));
         let body = areas(Rect::new(0, 0, 80, 24), 1, 0, false).body;
-        assert!(rows[body.y as usize].contains("hello"), "欢迎语不该被启动画面挤掉");
+        assert!(
+            rows[body.y as usize].contains("hello"),
+            "欢迎语不该被启动画面挤掉"
+        );
         assert!(
             (body.y..body.bottom()).all(|y| art_cells(&rows[y as usize]) == 0),
             "24 行不该画启动画面"
@@ -1145,7 +1197,10 @@ mod tests {
             .map(|r| r.chars().filter(|c| *c == '▀' || *c == '▄').count())
             .max()
             .unwrap_or(0);
-        assert!(blocks > 10, "启动画面应当是整行图片，实际最多 {blocks} 个半块字符");
+        assert!(
+            blocks > 10,
+            "启动画面应当是整行图片，实际最多 {blocks} 个半块字符"
+        );
 
         // 图下面只跟一句说明（图上已经有手写的品牌名）
         let squeeze = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
@@ -1193,7 +1248,10 @@ mod tests {
         assert!(all.iter().any(|r| r.contains("搜索输入关键词过滤")));
         assert!(all.iter().any(|r| r.contains("如何防止SQL注入")), "{all:?}");
         assert!(all.iter().any(|r| r.contains("聊聊天气")));
-        assert!(all.iter().any(|r| r.contains("Enter打开")), "页脚要有快捷键");
+        assert!(
+            all.iter().any(|r| r.contains("Enter打开")),
+            "页脚要有快捷键"
+        );
 
         // 浮层只占对话区：图标栏和输入框还留在原位
         let body = areas(Rect::new(0, 0, 100, 34), 1, 0, false).body;
@@ -1233,6 +1291,9 @@ mod tests {
         assert!(all.iter().any(|r| r.contains("历史对话1/2")), "{all:?}");
         assert!(all.iter().any(|r| r.contains("搜索天气")));
         assert!(all.iter().any(|r| r.contains("聊聊天气")));
-        assert!(!all.iter().any(|r| r.contains("如何防止SQL注入")), "被过滤掉了");
+        assert!(
+            !all.iter().any(|r| r.contains("如何防止SQL注入")),
+            "被过滤掉了"
+        );
     }
 }

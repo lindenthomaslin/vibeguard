@@ -67,7 +67,12 @@ fn base() -> Option<&'static RgbaImage> {
     BASE.get_or_init(|| {
         let src = decoded()?;
         // Triangle 而不是 Lanczos：2 倍降采样看不出差别，debug 下快一个数量级
-        Some(imageops::resize(src, BASE_SIDE, BASE_SIDE, FilterType::Triangle))
+        Some(imageops::resize(
+            src,
+            BASE_SIDE,
+            BASE_SIDE,
+            FilterType::Triangle,
+        ))
     })
     .as_ref()
 }
@@ -437,7 +442,10 @@ mod tests {
     /// 图片必须只解码一次：每帧解码一张大图会让输入卡顿
     #[test]
     fn image_is_decoded_only_once() {
-        assert!(std::ptr::eq(avatar_lines().as_ptr(), avatar_lines().as_ptr()));
+        assert!(std::ptr::eq(
+            avatar_lines().as_ptr(),
+            avatar_lines().as_ptr()
+        ));
         assert!(std::ptr::eq(logo_image().unwrap(), logo_image().unwrap()));
         assert!(std::ptr::eq(
             avatar_image().unwrap(),

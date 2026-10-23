@@ -11,7 +11,10 @@ use unicode_width::UnicodeWidthChar;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entry {
     User(String),
-    Assistant { reasoning: String, content: String },
+    Assistant {
+        reasoning: String,
+        content: String,
+    },
     Info(String),
     Success(String),
     Warn(String),
@@ -109,7 +112,11 @@ fn prefixed(rows: Vec<String>, lead: Span<'static>, style: Style) -> Vec<Line<'s
     rows.into_iter()
         .enumerate()
         .map(|(i, row)| {
-            let first = if i == 0 { lead.clone() } else { Span::raw("  ") };
+            let first = if i == 0 {
+                lead.clone()
+            } else {
+                Span::raw("  ")
+            };
             Line::from(vec![first, Span::styled(row, style)])
         })
         .collect()
@@ -131,19 +138,25 @@ impl Entry {
         match self {
             Entry::User(t) => prefixed(wrap(t, body_w), marker(g.user, look.palette.accent), plain),
             Entry::Info(t) => prefixed(wrap(t, body_w), marker(g.info, look.palette.accent), plain),
-            Entry::Success(t) => {
-                prefixed(wrap(t, body_w), marker(g.success, look.palette.success), plain)
-            }
-            Entry::Warn(t) => prefixed(wrap(t, body_w), marker(g.warn, look.palette.warn), look.warn()),
-            Entry::Error(t) => {
-                prefixed(wrap(t, body_w), marker(g.error, look.palette.error), look.error())
-            }
+            Entry::Success(t) => prefixed(
+                wrap(t, body_w),
+                marker(g.success, look.palette.success),
+                plain,
+            ),
+            Entry::Warn(t) => prefixed(
+                wrap(t, body_w),
+                marker(g.warn, look.palette.warn),
+                look.warn(),
+            ),
+            Entry::Error(t) => prefixed(
+                wrap(t, body_w),
+                marker(g.error, look.palette.error),
+                look.error(),
+            ),
             Entry::Block(lines) => lines.clone(),
             Entry::Summary(findings) => scan_ui::summary_lines(findings, look),
             Entry::Scan(report) => scan_ui::report_lines(report, look),
-            Entry::ScanAi { judgements, failed } => {
-                scan_ui::ai_lines(judgements, failed, look)
-            }
+            Entry::ScanAi { judgements, failed } => scan_ui::ai_lines(judgements, failed, look),
             Entry::Card {
                 finding,
                 fix,

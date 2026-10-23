@@ -101,7 +101,11 @@ pub fn batches(checklist: &VulnChecklist, skip: &[&str]) -> Vec<Batch> {
     };
 
     for cat in checklist.categories() {
-        for item in checklist.by_category(cat).into_iter().filter(|i| !skip.contains(&i.id.as_str())) {
+        for item in checklist
+            .by_category(cat)
+            .into_iter()
+            .filter(|i| !skip.contains(&i.id.as_str()))
+        {
             if current.len() >= BATCH {
                 flush(&mut current, &mut categories, &mut out);
             }
@@ -125,15 +129,71 @@ pub struct Digest {
 
 /// 名字里带这些词的文件优先塞进摘要——安全问题和它们最相关
 const HOT_WORDS: &[&str] = &[
-    "auth", "login", "signin", "session", "token", "jwt", "user", "admin", "permission",
-    "role", "acl", "api", "route", "handler", "controller", "view", "middleware", "config",
-    "setting", "db", "sql", "model", "query", "upload", "file", "exec", "cmd", "shell",
-    "crypto", "secret", "key", "docker", "compose", "deploy", "nginx", "server",
+    "auth",
+    "login",
+    "signin",
+    "session",
+    "token",
+    "jwt",
+    "user",
+    "admin",
+    "permission",
+    "role",
+    "acl",
+    "api",
+    "route",
+    "handler",
+    "controller",
+    "view",
+    "middleware",
+    "config",
+    "setting",
+    "db",
+    "sql",
+    "model",
+    "query",
+    "upload",
+    "file",
+    "exec",
+    "cmd",
+    "shell",
+    "crypto",
+    "secret",
+    "key",
+    "docker",
+    "compose",
+    "deploy",
+    "nginx",
+    "server",
 ];
 
 const CODE_EXTS: &[&str] = &[
-    "rs", "py", "js", "jsx", "ts", "tsx", "go", "java", "kt", "rb", "php", "cs", "swift", "c",
-    "cc", "cpp", "h", "hpp", "sql", "vue", "svelte", "yml", "yaml", "toml", "env", "tf",
+    "rs",
+    "py",
+    "js",
+    "jsx",
+    "ts",
+    "tsx",
+    "go",
+    "java",
+    "kt",
+    "rb",
+    "php",
+    "cs",
+    "swift",
+    "c",
+    "cc",
+    "cpp",
+    "h",
+    "hpp",
+    "sql",
+    "vue",
+    "svelte",
+    "yml",
+    "yaml",
+    "toml",
+    "env",
+    "tf",
     "Dockerfile",
 ];
 
@@ -148,8 +208,16 @@ pub fn digest(root: &Path) -> Digest {
             let name = e.file_name().to_string_lossy();
             !matches!(
                 name.as_ref(),
-                "node_modules" | "target" | "dist" | "build" | ".git" | "vendor" | ".venv"
-                    | "__pycache__" | "coverage" | "assets"
+                "node_modules"
+                    | "target"
+                    | "dist"
+                    | "build"
+                    | ".git"
+                    | "vendor"
+                    | ".venv"
+                    | "__pycache__"
+                    | "coverage"
+                    | "assets"
             )
         })
         .build();
@@ -277,7 +345,12 @@ pub fn fix_prompt(finding: &crate::finding::Finding, content: &str) -> String {
     format!(
         "你是安全工程师，正在修一个具体的安全问题。\n\n         文件：{file}\n         问题：[{id}] {title}\n         位置：第 {line} 行\n         说明：{desc}\n         修复要点：{fix}\n\n         要求：\n         1. 只改和这个问题相关的代码，其余原样保留，不要顺手重构、不要改格式。\n         2. 返回**修好之后的完整文件**，不要省略、不要用「...」代替、不要只给片段。\n         3. 如果这个文件里其实没有问题，把 content 原样返回，并在 note 里说明理由。\n\n         以 json 输出：{{\"content\":\"完整文件内容\",\"note\":\"改了什么\"}}\n\n         文件全文：\n```\n{content}\n```",
         file = finding.file,
-        id = finding.description.split(']').next().unwrap_or("").trim_start_matches('['),
+        id = finding
+            .description
+            .split(']')
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('['),
         title = finding.title,
         line = finding.line,
         desc = finding.description,
@@ -336,8 +409,7 @@ pub fn parse(text: &str) -> Result<Vec<Judgement>> {
     if end <= start {
         anyhow::bail!("模型返回的 JSON 不完整");
     }
-    let raw: Raw =
-        serde_json::from_str(&text[start..=end]).context("模型返回的 JSON 解析失败")?;
+    let raw: Raw = serde_json::from_str(&text[start..=end]).context("模型返回的 JSON 解析失败")?;
 
     let mut out = Vec::new();
     for r in raw.results {
@@ -362,12 +434,13 @@ pub fn parse(text: &str) -> Result<Vec<Judgement>> {
 /// 把判定转成 `(文件, 行号)`。模型给的证据五花八门：
 /// `app.py:12`、`app.py:12-18`、`src/a.rs:3（函数 verify）`、`见 app.py`
 pub fn split_evidence(evidence: &str) -> (String, u32) {
-    let head = evidence.split(['（', '(']).next().unwrap_or(evidence).trim();
+    let head = evidence
+        .split(['（', '('])
+        .next()
+        .unwrap_or(evidence)
+        .trim();
     if let Some((file, rest)) = head.rsplit_once(':') {
-        let digits: String = rest
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         if let Ok(line) = digits.parse::<u32>() {
             return (file.trim().to_string(), line);
         }
@@ -430,7 +503,11 @@ mod tests {
         let skip = crate::scan::covered_ids();
         let bs = batches(&list, &skip);
         let total: usize = bs.iter().map(|b| b.items.len()).sum();
-        assert_eq!(total, list.len() - skip.len(), "本地判过的条目不该再问一遍模型");
+        assert_eq!(
+            total,
+            list.len() - skip.len(),
+            "本地判过的条目不该再问一遍模型"
+        );
         for b in &bs {
             for item in &b.items {
                 assert!(!skip.contains(&item.id.as_str()), "{} 重复了", item.id);
@@ -467,7 +544,10 @@ mod tests {
         for item in &b.items {
             assert!(p.contains(&item.id), "提示词里少了 {}", item.id);
         }
-        assert!(p.contains("json"), "DeepSeek 的 json 模式要求提示词里出现 json");
+        assert!(
+            p.contains("json"),
+            "DeepSeek 的 json 模式要求提示词里出现 json"
+        );
         assert!(p.contains("a.py"));
     }
 
@@ -553,10 +633,7 @@ mod tests {
             parse_fix(r#"{"content":"line1\nline2","note":"改好了"}"#).unwrap(),
             "line1\nline2"
         );
-        assert_eq!(
-            parse_fix("```python\nprint(1)\n```").unwrap(),
-            "print(1)"
-        );
+        assert_eq!(parse_fix("```python\nprint(1)\n```").unwrap(), "print(1)");
         assert!(parse_fix("我不知道").is_err(), "解析不了就要报错，不能瞎猜");
     }
 

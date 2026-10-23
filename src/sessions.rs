@@ -166,8 +166,7 @@ impl Store {
         let text = serde_json::to_string_pretty(c).context("序列化对话失败")?;
         let path = self.file(&c.id);
         let tmp = self.dir.join(format!("{}.json.tmp", c.id));
-        write_private(&tmp, &text)
-            .with_context(|| format!("写入对话失败：{}", tmp.display()))?;
+        write_private(&tmp, &text).with_context(|| format!("写入对话失败：{}", tmp.display()))?;
         fs::rename(&tmp, &path).with_context(|| format!("保存对话失败：{}", path.display()))
     }
 
@@ -190,8 +189,7 @@ impl Store {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
             Err(e) => {
-                return Err(e)
-                    .with_context(|| format!("读取对话目录失败：{}", self.dir.display()));
+                return Err(e).with_context(|| format!("读取对话目录失败：{}", self.dir.display()));
             }
         };
         let mut all = Vec::new();
@@ -571,7 +569,11 @@ mod tests {
         let s = snippet(&text, at, 6);
         assert_eq!(
             s,
-            format!("…{}Needle{}…", "a".repeat(SNIPPET_BEFORE), "b".repeat(SNIPPET_AFTER))
+            format!(
+                "…{}Needle{}…",
+                "a".repeat(SNIPPET_BEFORE),
+                "b".repeat(SNIPPET_AFTER)
+            )
         );
         // 命中在开头且文本很短：两侧都没有省略号
         assert_eq!(snippet("hi there", 0, 2), "hi there");

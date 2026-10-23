@@ -30,7 +30,11 @@ fn accent() -> Color {
 
 /// 警告色。`Yellow` 压在浅色底上几乎看不见，换成洋红
 fn warning() -> Color {
-    if light() { Color::Magenta } else { Color::Yellow }
+    if light() {
+        Color::Magenta
+    } else {
+        Color::Yellow
+    }
 }
 
 pub fn term_width() -> usize {

@@ -36,10 +36,48 @@ struct Rule {
 }
 
 const CODE: &[&str] = &[
-    "rs", "py", "js", "jsx", "ts", "tsx", "go", "java", "kt", "rb", "php", "cs", "swift", "c",
-    "cc", "cpp", "h", "hpp", "scala", "sh", "bash", "sql", "vue", "svelte", "astro", "erb",
-    "html", "htm", "ejs", "jinja", "j2", "twig", "yml", "yaml", "toml", "ini", "conf", "env",
-    "properties", "xml", "tf", "tfvars",
+    "rs",
+    "py",
+    "js",
+    "jsx",
+    "ts",
+    "tsx",
+    "go",
+    "java",
+    "kt",
+    "rb",
+    "php",
+    "cs",
+    "swift",
+    "c",
+    "cc",
+    "cpp",
+    "h",
+    "hpp",
+    "scala",
+    "sh",
+    "bash",
+    "sql",
+    "vue",
+    "svelte",
+    "astro",
+    "erb",
+    "html",
+    "htm",
+    "ejs",
+    "jinja",
+    "j2",
+    "twig",
+    "yml",
+    "yaml",
+    "toml",
+    "ini",
+    "conf",
+    "env",
+    "properties",
+    "xml",
+    "tf",
+    "tfvars",
 ];
 
 /// 规则表。加规则时先问一句：这条会不会在正常代码上误报？
@@ -151,7 +189,9 @@ const RULES: &[Rule] = &[
     Rule {
         id: "CONF-08",
         pattern: r#"(?i)^\s*(DEBUG|debug)\s*[:=]\s*(True|true|1)\s*,?\s*$"#,
-        exts: &["py", "js", "ts", "yaml", "yml", "toml", "conf", "ini", "env"],
+        exts: &[
+            "py", "js", "ts", "yaml", "yml", "toml", "conf", "ini", "env",
+        ],
         names: &[],
         note: "调试模式上线会泄露堆栈、配置和内部路径",
         unless: &[],
@@ -200,7 +240,12 @@ const RULES: &[Rule] = &[
         id: "CONF-19",
         pattern: r"(?i)(privileged\s*:\s*true|/var/run/docker\.sock|--privileged)",
         exts: &["yml", "yaml"],
-        names: &["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"],
+        names: &[
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "compose.yml",
+            "compose.yaml",
+        ],
         note: "特权容器或挂载 docker.sock，等于把宿主机交给容器",
         unless: &[],
     },
@@ -243,7 +288,9 @@ fn compiled() -> &'static [Compiled] {
         RULES
             .iter()
             .filter_map(|rule| {
-                Regex::new(rule.pattern).ok().map(|regex| Compiled { rule, regex })
+                Regex::new(rule.pattern)
+                    .ok()
+                    .map(|regex| Compiled { rule, regex })
             })
             .collect()
     })
@@ -305,8 +352,15 @@ pub fn scan_local(root: &Path, checklist: &VulnChecklist) -> LocalReport {
             let name = e.file_name().to_string_lossy();
             !matches!(
                 name.as_ref(),
-                "node_modules" | "target" | "dist" | "build" | ".git" | "vendor" | ".venv"
-                    | "__pycache__" | "coverage"
+                "node_modules"
+                    | "target"
+                    | "dist"
+                    | "build"
+                    | ".git"
+                    | "vendor"
+                    | ".venv"
+                    | "__pycache__"
+                    | "coverage"
             )
         })
         .build();
@@ -330,11 +384,7 @@ pub fn scan_local(root: &Path, checklist: &VulnChecklist) -> LocalReport {
         };
         // 文件自己声明了「别扫我」：规则表、测试夹具这类文件，
         // 里面的正则和示例代码会把自己匹配一遍
-        if text
-            .lines()
-            .take(10)
-            .any(|l| l.contains(IGNORE_FILE))
-        {
+        if text.lines().take(10).any(|l| l.contains(IGNORE_FILE)) {
             files_skipped += 1;
             continue;
         }
@@ -408,7 +458,9 @@ fn applies(rule: &Rule, name: &str, ext: &str) -> bool {
 /// 占位符和「从环境变量读」不是密钥，别报
 fn looks_like_placeholder(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
-    SECRET_ALLOW.iter().any(|w| lower.contains(&w.to_ascii_lowercase()))
+    SECRET_ALLOW
+        .iter()
+        .any(|w| lower.contains(&w.to_ascii_lowercase()))
 }
 
 /// 文件级规则：只看文件是否存在。返回是否命中（目前只用于统计）。
@@ -518,7 +570,13 @@ mod tests {
         report
             .findings
             .iter()
-            .map(|f| f.description.split(']').next().unwrap_or("").trim_start_matches('['))
+            .map(|f| {
+                f.description
+                    .split(']')
+                    .next()
+                    .unwrap_or("")
+                    .trim_start_matches('[')
+            })
             .collect()
     }
 
@@ -571,7 +629,10 @@ mod tests {
 
     #[test]
     fn dockerfile_running_as_root_is_reported() {
-        let (_d, r) = scan(&[("Dockerfile", "FROM python:3.12\nUSER root\nCMD [\"python\"]\n")]);
+        let (_d, r) = scan(&[(
+            "Dockerfile",
+            "FROM python:3.12\nUSER root\nCMD [\"python\"]\n",
+        )]);
         assert!(ids(&r).contains(&"CONF-18"), "{:?}", r.findings);
     }
 
@@ -599,7 +660,11 @@ mod tests {
     #[test]
     fn binary_files_are_counted_as_skipped() {
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("img.png"), [0x89, 0x50, 0x4e, 0x47, 0, 0, 0]).unwrap();
+        fs::write(
+            dir.path().join("img.png"),
+            [0x89, 0x50, 0x4e, 0x47, 0, 0, 0],
+        )
+        .unwrap();
         fs::write(dir.path().join("a.py"), "print(1)\n").unwrap();
         let r = scan_local(dir.path(), &VulnChecklist::new());
         assert_eq!(r.files_scanned, 1);
@@ -608,10 +673,7 @@ mod tests {
 
     #[test]
     fn an_inline_marker_silences_that_line_only() {
-        let (_d, r) = scan(&[(
-            "a.py",
-            "eval(x)  # scan:ignore\neval(y)\n",
-        )]);
+        let (_d, r) = scan(&[("a.py", "eval(x)  # scan:ignore\neval(y)\n")]);
         assert_eq!(r.findings.len(), 1, "{:?}", r.findings);
         assert_eq!(r.findings[0].line, 2);
     }
@@ -631,7 +693,11 @@ mod tests {
     fn every_rule_points_at_an_item_that_exists_in_the_checklist() {
         let list = VulnChecklist::new();
         for rule in RULES {
-            assert!(list.get(rule.id).is_some(), "规则 {} 在清单里不存在", rule.id);
+            assert!(
+                list.get(rule.id).is_some(),
+                "规则 {} 在清单里不存在",
+                rule.id
+            );
         }
         // 正则本身必须能编译
         assert_eq!(compiled().len(), RULES.len(), "有正则编译失败");

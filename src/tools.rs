@@ -1,10 +1,10 @@
 //! 文件和命令工具实现，供 AI 通过工具调用执行。
 
-use anyhow::{bail, Result, anyhow};
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::path::Path;
 use crate::llm::Tool;
+use anyhow::{Result, anyhow, bail};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -128,8 +128,8 @@ pub fn execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Strin
 fn _execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Result<Value> {
     match name {
         "read_file" => {
-            let args: serde_json::Map<String, Value> = serde_json::from_str(args_json)
-                .map_err(|e| anyhow!("参数格式错误：{e}"))?;
+            let args: serde_json::Map<String, Value> =
+                serde_json::from_str(args_json).map_err(|e| anyhow!("参数格式错误：{e}"))?;
             let path = args
                 .get("path")
                 .and_then(|v| v.as_str())
@@ -137,20 +137,17 @@ fn _execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Result<V
             read_file(path)
         }
         "list_dir" => {
-            let args: serde_json::Map<String, Value> = serde_json::from_str(args_json)
-                .unwrap_or_default();
-            let path = args
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let args: serde_json::Map<String, Value> =
+                serde_json::from_str(args_json).unwrap_or_default();
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
             list_dir(path)
         }
         "write_file" => {
             if matches!(mode, PermissionMode::ReadOnly) {
                 bail!("权限不足：不允许写文件")
             }
-            let args: serde_json::Map<String, Value> = serde_json::from_str(args_json)
-                .map_err(|e| anyhow!("参数格式错误：{e}"))?;
+            let args: serde_json::Map<String, Value> =
+                serde_json::from_str(args_json).map_err(|e| anyhow!("参数格式错误：{e}"))?;
             let path = args
                 .get("path")
                 .and_then(|v| v.as_str())
@@ -165,8 +162,8 @@ fn _execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Result<V
             if matches!(mode, PermissionMode::ReadOnly) {
                 bail!("权限不足：不允许编辑文件")
             }
-            let args: serde_json::Map<String, Value> = serde_json::from_str(args_json)
-                .map_err(|e| anyhow!("参数格式错误：{e}"))?;
+            let args: serde_json::Map<String, Value> =
+                serde_json::from_str(args_json).map_err(|e| anyhow!("参数格式错误：{e}"))?;
             let path = args
                 .get("path")
                 .and_then(|v| v.as_str())
@@ -185,8 +182,8 @@ fn _execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Result<V
             if !matches!(mode, PermissionMode::Full) {
                 bail!("权限不足：不允许执行命令")
             }
-            let args: serde_json::Map<String, Value> = serde_json::from_str(args_json)
-                .map_err(|e| anyhow!("参数格式错误：{e}"))?;
+            let args: serde_json::Map<String, Value> =
+                serde_json::from_str(args_json).map_err(|e| anyhow!("参数格式错误：{e}"))?;
             let cmd = args
                 .get("cmd")
                 .and_then(|v| v.as_str())
@@ -194,11 +191,7 @@ fn _execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Result<V
             let cmd_args: Vec<&str> = args
                 .get("args")
                 .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str())
-                        .collect()
-                })
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
 
             // 检查删除命令
@@ -263,9 +256,7 @@ fn edit_file(path: &str, old: &str, new: &str) -> Result<Value> {
 }
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<Value> {
-    let output = std::process::Command::new(cmd)
-        .args(args)
-        .output()?;
+    let output = std::process::Command::new(cmd).args(args).output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -285,7 +276,9 @@ fn is_delete_command(cmd: &str, args: &[&str]) -> bool {
 
     match cmd_base {
         "rm" | "rmdir" => true,
-        "git" => args.first().map_or(false, |&a| a == "clean" || a == "reset"),
+        "git" => args
+            .first()
+            .map_or(false, |&a| a == "clean" || a == "reset"),
         _ => false,
     }
 }
@@ -296,7 +289,11 @@ mod tests {
 
     #[test]
     fn read_only_blocks_write() {
-        let result = execute_tool("write_file", r#"{"path":"test.txt","content":"hi"}"#, &PermissionMode::ReadOnly);
+        let result = execute_tool(
+            "write_file",
+            r#"{"path":"test.txt","content":"hi"}"#,
+            &PermissionMode::ReadOnly,
+        );
         assert!(result.contains("权限不足"));
     }
 

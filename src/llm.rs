@@ -253,7 +253,9 @@ impl ApiError {
     fn hint(&self) -> &'static str {
         match self.status.as_u16() {
             400 => "请求格式错误",
-            401 => "API Key 无效或已过期，请输入 /model 重新设置（命令行：vibeguard config set api_key）",
+            401 => {
+                "API Key 无效或已过期，请输入 /model 重新设置（命令行：vibeguard config set api_key）"
+            }
             402 => "账户余额不足，请到服务商的控制台充值",
             403 => "无权访问该接口",
             404 => "接口地址不存在，请输入 /model 检查 API 地址和模型名",

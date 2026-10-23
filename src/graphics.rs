@@ -26,7 +26,10 @@ const PROBE_FLAG: &str = "--probe-graphics";
 /// tmux、screen 里探测常常问不出结果，这时可以自己指定。
 const GFX_ENV: &str = "VIBEGUARD_GFX";
 /// 强制协议时假设的字符尺寸（像素），一般终端都在这个量级
-const ASSUMED_FONT: FontSize = FontSize { width: 10, height: 20 };
+const ASSUMED_FONT: FontSize = FontSize {
+    width: 10,
+    height: 20,
+};
 
 /// 进程内唯一的原生图片能力。没有可用协议时所有字段都是 `None`。
 #[derive(Default)]
@@ -54,19 +57,13 @@ impl Graphics {
         };
         let picker = picker(protocol, font);
         Self {
-            avatar: icon::avatar_image()
-                .map(|img| picker.new_resize_protocol(img.clone())),
+            avatar: icon::avatar_image().map(|img| picker.new_resize_protocol(img.clone())),
             logo: Some(picker.new_resize_protocol(face.clone())),
         }
     }
 
     /// 一次借出两张图。两张图要同时画在同一帧上，分开借会撞借用检查。
-    pub fn split(
-        &mut self,
-    ) -> (
-        Option<&mut StatefulProtocol>,
-        Option<&mut StatefulProtocol>,
-    ) {
+    pub fn split(&mut self) -> (Option<&mut StatefulProtocol>, Option<&mut StatefulProtocol>) {
         (self.avatar.as_mut(), self.logo.as_mut())
     }
 }
@@ -176,8 +173,14 @@ mod tests {
         let (p, f) = parse_probe("kitty 8 17").unwrap();
         assert_eq!(p, ProtocolType::Kitty);
         assert_eq!((f.width, f.height), (8, 17));
-        assert!(matches!(parse_probe("iterm2 10 20").unwrap().0, ProtocolType::Iterm2));
-        assert!(matches!(parse_probe("sixel 9 18").unwrap().0, ProtocolType::Sixel));
+        assert!(matches!(
+            parse_probe("iterm2 10 20").unwrap().0,
+            ProtocolType::Iterm2
+        ));
+        assert!(matches!(
+            parse_probe("sixel 9 18").unwrap().0,
+            ProtocolType::Sixel
+        ));
     }
 
     /// 终端说不支持，或者子进程写了个残缺的结果，都要当没有

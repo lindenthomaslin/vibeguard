@@ -21,11 +21,11 @@ use crate::repl::SYSTEM_PROMPT;
 use crate::sessions::{Conversation, Store, format_ago};
 use crate::theme::{FontStyle, Look, Theme};
 use crate::ui;
-use futures_util::StreamExt;
 use anyhow::{Context, Result, bail};
 use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
 use crossterm::execute;
 use form::ModelSettings;
+use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -535,7 +535,9 @@ impl Session<'_> {
                             StreamEvent::Reasoning(t) => {
                                 events.send(Msg::Reasoning(req, t.to_string()))
                             }
-                            StreamEvent::Content(t) => events.send(Msg::Content(req, t.to_string())),
+                            StreamEvent::Content(t) => {
+                                events.send(Msg::Content(req, t.to_string()))
+                            }
                             StreamEvent::Retrying {
                                 attempt,
                                 delay,
@@ -665,8 +667,7 @@ impl Session<'_> {
                     self.conv.model = self.app.effective().model;
                     self.conv.push_exchange(&user, &res.content, now_secs());
                     if let Err(e) = self.store.save(&self.conv) {
-                        self.state
-                            .push(Entry::Warn(format!("对话保存失败：{e:#}")));
+                        self.state.push(Entry::Warn(format!("对话保存失败：{e:#}")));
                     }
                 }
             }
@@ -827,8 +828,7 @@ impl Session<'_> {
 
         let md_path = base.with_extension("md");
         let json_path = base.with_extension("json");
-        std::fs::write(&md_path, md)
-            .with_context(|| format!("写入失败：{}", md_path.display()))?;
+        std::fs::write(&md_path, md).with_context(|| format!("写入失败：{}", md_path.display()))?;
         std::fs::write(&json_path, js)
             .with_context(|| format!("写入失败：{}", json_path.display()))?;
 
@@ -837,8 +837,10 @@ impl Session<'_> {
             ui::tilde(&md_path),
             self.state.findings.len()
         )));
-        self.state
-            .push(Entry::Info(format!("同一份数据的机器可读版本：{}", ui::tilde(&json_path))));
+        self.state.push(Entry::Info(format!(
+            "同一份数据的机器可读版本：{}",
+            ui::tilde(&json_path)
+        )));
         // 空报告最容易骗人，这里再说一遍覆盖了多少
         if self.state.findings.is_empty() {
             self.state.push(Entry::Warn(format!(
@@ -917,7 +919,14 @@ impl Session<'_> {
             for (i, finding) in picked.into_iter().enumerate() {
                 let _ = tx.send(Msg::FixProgress(
                     req,
-                    format!("修复 {}/{}：{} · {}:{}", i + 1, total, finding.title, finding.file, finding.line),
+                    format!(
+                        "修复 {}/{}：{} · {}:{}",
+                        i + 1,
+                        total,
+                        finding.title,
+                        finding.file,
+                        finding.line
+                    ),
                 ));
                 let path = root.join(&finding.file);
                 let Ok(old) = std::fs::read_to_string(&path) else {
@@ -995,14 +1004,17 @@ impl Session<'_> {
             match std::fs::write(&path, &fix.new) {
                 Ok(()) => {
                     written += 1;
-                    self.state.push(Entry::Success(format!("已修复 {}", fix.file)));
+                    self.state
+                        .push(Entry::Success(format!("已修复 {}", fix.file)));
                 }
                 Err(e) => problems.push(format!("{} 写入失败：{e}", fix.file)),
             }
         }
         // 写成功的从待修列表里拿掉，免得下次 /fix 又提一遍
         let done: Vec<&str> = fixes.iter().map(|f| f.finding_id.as_str()).collect();
-        self.state.findings.retain(|f| !done.contains(&f.id.as_str()));
+        self.state
+            .findings
+            .retain(|f| !done.contains(&f.id.as_str()));
         if written > 0 {
             self.state
                 .push(Entry::Success(format!("共写入 {written} 个文件")));
@@ -1059,12 +1071,13 @@ impl Session<'_> {
 
             let Some(client) = client else { return };
             let digest_root = root.clone();
-            let Ok(digest) = tokio::task::spawn_blocking(move || {
-                crate::scan_ai::digest(&digest_root)
-            })
-            .await
+            let Ok(digest) =
+                tokio::task::spawn_blocking(move || crate::scan_ai::digest(&digest_root)).await
             else {
-                let _ = tx.send(Msg::ScanProgress(req, "生成仓库摘要失败，跳过模型判定".into()));
+                let _ = tx.send(Msg::ScanProgress(
+                    req,
+                    "生成仓库摘要失败，跳过模型判定".into(),
+                ));
                 return;
             };
 
@@ -1169,7 +1182,8 @@ impl Session<'_> {
     // ---- 斜杠命令 ----
 
     fn command(&mut self, parts: Vec<String>) {
-        self.state.push(Entry::User(format!("/{}", parts.join(" "))));
+        self.state
+            .push(Entry::User(format!("/{}", parts.join(" "))));
         if let Err(e) = self.run_command(&parts) {
             self.state.push(Entry::Error(format!("{e:#}")));
         }
@@ -1262,7 +1276,10 @@ impl Session<'_> {
                 let lines = self.config_lines();
                 self.state.push(Entry::Block(lines));
             }
-            ["init"] | ["set", "api_key"] | ["set", "base_url"] | ["set", "model"]
+            ["init"]
+            | ["set", "api_key"]
+            | ["set", "base_url"]
+            | ["set", "model"]
             | ["set", "thinking"] => self.open_model_form(),
             ["set", _] => bail!("请提供 value：/config set <key> <value>"),
             ["set", key, value @ ..] => {
@@ -1331,21 +1348,27 @@ impl Session<'_> {
     fn show_permissions(&mut self) {
         let cfg = self.app.effective();
         let lines = vec![
-            Line::from(vec![
-                Span::styled("权限设置", Style::new().add_modifier(Modifier::BOLD)),
-            ]),
+            Line::from(vec![Span::styled(
+                "权限设置",
+                Style::new().add_modifier(Modifier::BOLD),
+            )]),
             Line::raw(""),
             Line::from(vec![
-                Span::styled("  权限模式           ", Style::new().add_modifier(Modifier::DIM)),
+                Span::styled(
+                    "  权限模式           ",
+                    Style::new().add_modifier(Modifier::DIM),
+                ),
                 Span::raw(cfg.permission_mode.label()),
             ]),
             Line::from(vec![
-                Span::styled("  工作目录           ", Style::new().add_modifier(Modifier::DIM)),
-                Span::raw(
-                    cfg.workspace_root
-                        .as_ref()
-                        .map_or_else(|| "默认（启动时的当前目录）".to_string(), |p| p.display().to_string())
+                Span::styled(
+                    "  工作目录           ",
+                    Style::new().add_modifier(Modifier::DIM),
                 ),
+                Span::raw(cfg.workspace_root.as_ref().map_or_else(
+                    || "默认（启动时的当前目录）".to_string(),
+                    |p| p.display().to_string(),
+                )),
             ]),
             Line::raw(""),
             Line::styled("用法：", Style::new().add_modifier(Modifier::DIM)),
@@ -1435,17 +1458,19 @@ impl Session<'_> {
         for mode in Mode::ALL {
             let current = mode == self.state.mode;
             let (mark, style) = if current {
-                ("›", Style::new().fg(look.chip(mode)).add_modifier(Modifier::BOLD))
+                (
+                    "›",
+                    Style::new()
+                        .fg(look.chip(mode))
+                        .add_modifier(Modifier::BOLD),
+                )
             } else {
                 (" ", dim)
             };
             out.push(Line::from(vec![
                 // 8 列 = 最长的 "confirm" 再加一格，三行说明才会对齐
                 Span::styled(format!("  {mark} {:<8}", mode.label()), style),
-                Span::styled(
-                    mode.describe(),
-                    if current { Style::new() } else { dim },
-                ),
+                Span::styled(mode.describe(), if current { Style::new() } else { dim }),
             ]));
         }
         out.push(Line::styled(
@@ -1572,7 +1597,9 @@ mod tests {
         // 四行的值从同一显示列开始（中文占两列）
         let values = ["https://api.deepseek.com", "sk-…cdef", "m", "high"];
         for (line, value) in lines.iter().zip(values) {
-            let at = line.find(value).unwrap_or_else(|| panic!("{value} in {line:?}"));
+            let at = line
+                .find(value)
+                .unwrap_or_else(|| panic!("{value} in {line:?}"));
             assert_eq!(line[..at].width(), 11, "{line:?}");
         }
     }
@@ -1599,7 +1626,11 @@ mod tests {
             .map(crate::chat::line_text)
             .collect();
         for c in COMMANDS {
-            assert!(text.iter().any(|l| l.contains(c.name)), "missing {}", c.name);
+            assert!(
+                text.iter().any(|l| l.contains(c.name)),
+                "missing {}",
+                c.name
+            );
         }
     }
 

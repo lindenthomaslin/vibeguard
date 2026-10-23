@@ -261,7 +261,10 @@ mod tests {
             (dark.palette.error, light.palette.error),
             (dark.palette.info, light.palette.info),
         ] {
-            assert!(luma(d) > luma(l), "浅色主题应当比深色主题暗：{d:?} vs {l:?}");
+            assert!(
+                luma(d) > luma(l),
+                "浅色主题应当比深色主题暗：{d:?} vs {l:?}"
+            );
         }
     }
 
@@ -319,7 +322,10 @@ mod tests {
                 for mode in Mode::ALL {
                     let bg = look.chip(mode);
                     // 压黑字的底色必须够亮，否则黑字看不见
-                    assert!(luma(bg) as f32 / (255.0 * 1000.0) > 0.55, "{theme:?}/{font:?} 的 {mode:?} 底色太暗");
+                    assert!(
+                        luma(bg) as f32 / (255.0 * 1000.0) > 0.55,
+                        "{theme:?}/{font:?} 的 {mode:?} 底色太暗"
+                    );
                 }
             }
         }
