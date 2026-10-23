@@ -375,9 +375,7 @@ pub fn scan_local(root: &Path, checklist: &VulnChecklist) -> LocalReport {
             continue;
         }
         // 文件级规则先跑：这类问题不看内容，只看「这个文件在不在」
-        if let Some(f) = file_level(path, root, checklist, &mut findings) {
-            let _ = f;
-        }
+        file_level(path, root, checklist, &mut findings);
         let Ok(text) = read_text(path) else {
             files_skipped += 1;
             continue;
@@ -463,48 +461,45 @@ fn looks_like_placeholder(line: &str) -> bool {
         .any(|w| lower.contains(&w.to_ascii_lowercase()))
 }
 
-/// 文件级规则：只看文件是否存在。返回是否命中（目前只用于统计）。
-fn file_level(
-    path: &Path,
-    root: &Path,
-    checklist: &VulnChecklist,
-    findings: &mut Vec<Finding>,
-) -> Option<()> {
-    let name = path.file_name().and_then(|s| s.to_str())?;
+/// 文件级规则：只看文件是否存在，不看内容。
+fn file_level(path: &Path, root: &Path, checklist: &VulnChecklist, findings: &mut Vec<Finding>) {
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return;
+    };
     let rel = path.strip_prefix(root).unwrap_or(path);
 
     // CONF-02：.env 进了仓库
-    if name == ".env" || (name.starts_with(".env.") && name != ".env.example") {
-        if let Some(item) = checklist.get("CONF-02") {
-            findings.push(make_finding(
-                findings.len(),
-                item.severity,
-                item,
-                "环境变量文件被提交进了仓库，里面通常含真实密钥",
-                root,
-                path,
-                1,
-            ));
-        }
+    if (name == ".env" || (name.starts_with(".env.") && name != ".env.example"))
+        && let Some(item) = checklist.get("CONF-02")
+    {
+        findings.push(make_finding(
+            findings.len(),
+            item.severity,
+            item,
+            "环境变量文件被提交进了仓库，里面通常含真实密钥",
+            root,
+            path,
+            1,
+        ));
     }
     // CONF-22：备份 / 版本控制残留暴露
     let backup = [".bak", ".old", ".swp", ".sql", ".zip", ".tar", ".gz"]
         .iter()
         .any(|s| name.to_ascii_lowercase().ends_with(s));
-    if backup && !rel.starts_with("assets") {
-        if let Some(item) = checklist.get("CONF-22") {
-            findings.push(make_finding(
-                findings.len(),
-                item.severity,
-                item,
-                "备份或打包文件留在项目里，部署后往往能被直接下载",
-                root,
-                path,
-                1,
-            ));
-        }
+    if backup
+        && !rel.starts_with("assets")
+        && let Some(item) = checklist.get("CONF-22")
+    {
+        findings.push(make_finding(
+            findings.len(),
+            item.severity,
+            item,
+            "备份或打包文件留在项目里，部署后往往能被直接下载",
+            root,
+            path,
+            1,
+        ));
     }
-    Some(())
 }
 
 #[allow(clippy::too_many_arguments)]

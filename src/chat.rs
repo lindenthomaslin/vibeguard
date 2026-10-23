@@ -323,11 +323,11 @@ impl Scroll {
         self.height.saturating_sub(1).max(1)
     }
 
-    pub fn to_top(&mut self) {
+    pub fn jump_to_top(&mut self) {
         self.top = Some(0);
     }
 
-    pub fn to_bottom(&mut self) {
+    pub fn jump_to_bottom(&mut self) {
         self.top = None;
     }
 
@@ -498,7 +498,7 @@ mod tests {
         s.resolve(100, 10);
         s.up(500);
         assert_eq!(s.resolve(100, 10), 0);
-        s.to_bottom();
+        s.jump_to_bottom();
         assert_eq!(s.resolve(5, 10), 0);
         s.up(3);
         assert_eq!(s.resolve(5, 10), 0);

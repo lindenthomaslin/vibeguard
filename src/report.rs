@@ -41,7 +41,7 @@ impl Meta {
 pub fn markdown(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> String {
     let mut out = String::new();
     out.push_str("# VibeGuard 扫描报告\n\n");
-    out.push_str(&format!("| | |\n|---|---|\n"));
+    out.push_str("| | |\n|---|---|\n");
     out.push_str(&format!("| 扫描目标 | `{}` |\n", meta.root));
     out.push_str(&format!("| 生成时间 | {} |\n", meta.when));
     out.push_str(&format!("| 工具版本 | vibeguard {} |\n", meta.version));

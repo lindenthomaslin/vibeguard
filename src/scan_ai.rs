@@ -364,14 +364,12 @@ pub fn parse_fix(text: &str) -> Result<String> {
     struct Raw {
         content: String,
     }
-    if let Some(start) = text.find('{') {
-        if let Some(end) = text.rfind('}') {
-            if end > start {
-                if let Ok(raw) = serde_json::from_str::<Raw>(&text[start..=end]) {
-                    return Ok(raw.content);
-                }
-            }
-        }
+    if let Some(start) = text.find('{')
+        && let Some(end) = text.rfind('}')
+        && end > start
+        && let Ok(raw) = serde_json::from_str::<Raw>(&text[start..=end])
+    {
+        return Ok(raw.content);
     }
     // 退路：剥掉代码块围栏，整段当文件内容
     let trimmed = text.trim();

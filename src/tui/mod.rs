@@ -507,7 +507,7 @@ impl Session<'_> {
         // 计划模式一律只读：配置里就算给了全权限，也不该在这档里动文件
         let perm = match mode {
             Mode::Plan => crate::tools::PermissionMode::ReadOnly,
-            Mode::Confirm | Mode::Auto => self.app.file.permission_mode.clone(),
+            Mode::Confirm | Mode::Auto => self.app.file.permission_mode,
         };
         // 「本次全部应用」只对当前这一轮有效，下一轮重新问
         self.always_apply.store(false, Ordering::Relaxed);
@@ -518,8 +518,10 @@ impl Session<'_> {
             let start = Instant::now();
             let events = tx.clone();
 
-            let mut opts = ChatOptions::default();
-            opts.tools = tools;
+            let opts = ChatOptions {
+                tools,
+                ..ChatOptions::default()
+            };
 
             // 工具调用循环
             let mut loop_count = 0;
@@ -888,10 +890,10 @@ impl Session<'_> {
             if picked.len() >= limit {
                 break;
             }
-            if let Some(id) = wanted {
-                if f.id != id {
-                    continue;
-                }
+            if let Some(id) = wanted
+                && f.id != id
+            {
+                continue;
             }
             let path = self.scan_root.join(&f.file);
             if !path.is_file() {
@@ -1032,7 +1034,7 @@ impl Session<'_> {
         if self.state.busy.is_some() {
             bail!("正在忙，等这次结束或者按 Esc 取消");
         }
-        let with_ai = args.iter().any(|a| *a == "--ai");
+        let with_ai = args.contains(&"--ai");
         let root = match args.iter().find(|a| !a.starts_with('-')) {
             Some(p) => std::path::PathBuf::from(p),
             None => std::env::current_dir()?,
@@ -1638,8 +1640,10 @@ mod tests {
     #[test]
     fn help_paints_the_command_names_with_the_current_accent() {
         let look = |theme: &str| {
-            let mut cfg = crate::config::Config::default();
-            cfg.theme = theme.into();
+            let cfg = crate::config::Config {
+                theme: theme.into(),
+                ..Default::default()
+            };
             Look::from_config(&cfg)
         };
         let name_colour = |look: &Look| {

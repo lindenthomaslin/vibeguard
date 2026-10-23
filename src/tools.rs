@@ -276,9 +276,7 @@ fn is_delete_command(cmd: &str, args: &[&str]) -> bool {
 
     match cmd_base {
         "rm" | "rmdir" => true,
-        "git" => args
-            .first()
-            .map_or(false, |&a| a == "clean" || a == "reset"),
+        "git" => args.first().is_some_and(|&a| a == "clean" || a == "reset"),
         _ => false,
     }
 }

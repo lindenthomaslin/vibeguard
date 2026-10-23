@@ -41,10 +41,11 @@ struct Painter {
 impl Painter {
     fn draw(&mut self, f: &Frame) -> io::Result<()> {
         // 跳过完全相同的帧
-        if let Some(ref last) = self.last_frame {
-            if last.lines == f.lines && last.cursor == f.cursor {
-                return Ok(());
-            }
+        if let Some(ref last) = self.last_frame
+            && last.lines == f.lines
+            && last.cursor == f.cursor
+        {
+            return Ok(());
         }
         self.last_frame = Some(f.clone());
 

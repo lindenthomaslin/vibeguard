@@ -213,18 +213,15 @@ pub fn ai_lines(
         ),
     ])];
 
-    let mut listed = 0;
-    for j in judgements
+    let hits: Vec<_> = judgements
         .iter()
         .filter(|j| matches!(j.verdict, Verdict::Exists | Verdict::Suspected))
-    {
-        if listed == 0 {
-            out.push(Line::raw(""));
-        }
-        if listed >= MAX_LISTED {
-            break;
-        }
-        listed += 1;
+        .take(MAX_LISTED)
+        .collect();
+    if !hits.is_empty() {
+        out.push(Line::raw(""));
+    }
+    for j in hits {
         let style = if j.verdict == Verdict::Exists {
             look.error()
         } else {

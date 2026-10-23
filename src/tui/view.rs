@@ -800,7 +800,7 @@ mod tests {
             fx.transcript.push(Entry::Info(format!("message {i}")));
         }
         fx.render(80, 30);
-        fx.scroll.to_top();
+        fx.scroll.jump_to_top();
         let rows = screen(&fx.render(80, 30));
         assert!(rows.iter().any(|r| r.contains("message 0")));
         assert!(!rows.iter().any(|r| r.contains("message 99")));
@@ -1129,8 +1129,7 @@ mod tests {
         let body = areas(Rect::new(0, 0, 80, 40), 1, 0, false).body;
         let at = rows.iter().position(|r| r.contains("hello")).unwrap() as u16;
         let art = (body.y..body.bottom())
-            .filter(|y| art_cells(&rows[*y as usize]) > 0)
-            .last()
+            .rfind(|y| art_cells(&rows[*y as usize]) > 0)
             .unwrap();
         assert!(
             at >= art + 2,

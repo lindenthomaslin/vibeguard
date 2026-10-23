@@ -185,12 +185,15 @@ pub fn logo_size(term_height: u16, native: bool) -> Option<(u16, u16)> {
     while cols > min && cols / 2 + 1 > room {
         cols -= 1;
     }
-    (cols / 2 + 1 <= room).then_some((cols, cols / 2))
+    (cols / 2 < room).then_some((cols, cols / 2))
 }
+
+/// 按尺寸缓存的字符画
+type ArtCache = Mutex<HashMap<(u16, u16), &'static [Line<'static>]>>;
 
 /// 启动画面的字符画版本，每个尺寸只渲染一次
 pub fn logo_lines(size: (u16, u16)) -> &'static [Line<'static>] {
-    static CACHE: OnceLock<Mutex<HashMap<(u16, u16), &'static [Line<'static>]>>> = OnceLock::new();
+    static CACHE: OnceLock<ArtCache> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(lines) = cache.get(&size) {
@@ -407,7 +410,7 @@ mod tests {
                 match logo_size(term, native) {
                     Some((cols, rows)) => {
                         assert_eq!(rows, cols / 2, "方图的行数应当是列数的一半");
-                        assert!(rows + 1 <= term - 17, "终端 {term} 行放不下 {rows} 行图");
+                        assert!(rows < term - 17, "终端 {term} 行放不下 {rows} 行图");
                         let min = if native {
                             LOGO_MIN_COLS_GRAPHICS
                         } else {

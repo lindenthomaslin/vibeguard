@@ -326,7 +326,7 @@ impl AppState {
 
     pub fn push(&mut self, entry: Entry) {
         self.transcript.push(entry);
-        self.scroll.to_bottom();
+        self.scroll.jump_to_bottom();
     }
 
     /// 开始逐条确认：先显示汇总，再显示第一条
@@ -409,11 +409,11 @@ impl AppState {
                 return Action::None;
             }
             KeyCode::Char('b') if ctrl => {
-                self.scroll.to_top();
+                self.scroll.jump_to_top();
                 return Action::None;
             }
             KeyCode::Char('g') if ctrl => {
-                self.scroll.to_bottom();
+                self.scroll.jump_to_bottom();
                 return Action::None;
             }
             _ => {}

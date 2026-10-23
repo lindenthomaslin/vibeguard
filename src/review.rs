@@ -117,7 +117,7 @@ pub fn review_interactive(findings: &[Finding], fixes: &[Fix]) -> Result<Vec<Fix
         println!();
         let choice = Select::with_theme(&ColorfulTheme::default())
             .with_prompt("应用这个修复？")
-            .items(&["应用", "跳过", "应用此条及之后全部", "结束确认"])
+            .items(["应用", "跳过", "应用此条及之后全部", "结束确认"])
             .default(0)
             .interact()?;
         Ok(match choice {
