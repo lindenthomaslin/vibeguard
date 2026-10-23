@@ -18,6 +18,7 @@
 </p>
 
 <p align="center">
+  <a href="https://thomas-ai.space">官网</a> ·
   <a href="HANDOFF.zh-CN.md">交接文档</a> ·
   <a href="README.md">English</a>
 </p>
@@ -117,6 +118,12 @@ AI 那一层还没有标定集，所以把它的输出当**线索**，别当结�
 
 - **[交接文档 HANDOFF.zh-CN.md](HANDOFF.zh-CN.md)** —— 为什么做这个、架构图、权限模型、配置、已知缺口，以及那些真金白银换来的依赖踩坑
 - [English](HANDOFF.md)
+
+## 关于
+
+本项目由 **Thomas** 开发 —— 官网：[thomas-ai.space](https://thomas-ai.space)。
+
+文档默认英文（`README.md`），中文版是这份 `README.zh-CN.md`；每份文档顶部都能切到另一语言。
 
 ## 许可
 

@@ -2,6 +2,11 @@
 name = "vibeguard"
 version = "0.1.0"
 edition = "2024"
+authors = ["Thomas <2507979441@qq.com>"]
+description = "A terminal security reviewer for vibe-coded projects"
+homepage = "https://thomas-ai.space"
+repository = "https://github.com/lindenthomaslin/vibeguard"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.104"

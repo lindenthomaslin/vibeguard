@@ -18,6 +18,7 @@
 </p>
 
 <p align="center">
+  <a href="https://thomas-ai.space">Website</a> ·
   <a href="HANDOFF.md">Handoff</a> ·
   <a href="README.zh-CN.md">中文</a>
 </p>
@@ -124,6 +125,13 @@ The report files are worth adding to your `.gitignore`.
 - **[HANDOFF.md](HANDOFF.md)** — why this exists, architecture diagrams, the permission model,
   configuration, known gaps, and the dependency notes worth keeping
 - [中文文档](HANDOFF.zh-CN.md)
+
+## About
+
+Built by **Thomas** — [thomas-ai.space](https://thomas-ai.space).
+
+English is the default language for this project's docs; the Chinese version is
+[README.zh-CN.md](README.zh-CN.md), and every document links to its counterpart at the top.
 
 ## License
 
