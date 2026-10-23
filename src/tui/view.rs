@@ -134,8 +134,15 @@ pub fn draw(frame: &mut Frame, mut p: Props<'_>) {
             p.status.to_string()
         };
         // 左下角常驻模式标签：反色小块，一眼能看出 AI 现在能不能动文件
+        // plan 是「强制只读」：光写 plan 不够，得让用户一眼看出这个模式不管
+        // permission_mode 设成什么都改不了文件
+        let chip_text = if p.mode == Mode::Plan {
+            format!(" {} {} · 只读 ", p.mode.glyph(), p.mode.label())
+        } else {
+            format!(" {} {} ", p.mode.glyph(), p.mode.label())
+        };
         let chip = Span::styled(
-            format!(" {} {} ", p.mode.glyph(), p.mode.label()),
+            chip_text,
             Style::new()
                 .fg(Color::Black)
                 .bg(p.look.chip(p.mode))
@@ -729,7 +736,12 @@ mod tests {
         fx.mode = Mode::Plan;
         let term = fx.render(80, 30);
         let rows = screen(&term);
-        assert!(rows[29].starts_with(" ○ plan "), "{:?}", rows[29]);
+        // plan 会强制只读，标签上直接写出来：否则用户设了 full 还是被拒，会一头雾水
+        assert!(
+            squeeze(&rows[29]).starts_with("○plan·只读"),
+            "{:?}",
+            rows[29]
+        );
         // 宽字符后面的补位格会插进空格，比较前先压掉空白
         assert!(squeeze(&rows[29]).contains("Enter发送"), "{:?}", rows[29]);
         assert_eq!(

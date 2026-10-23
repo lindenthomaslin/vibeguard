@@ -700,15 +700,38 @@ impl Session<'_> {
                                 ok: true,
                             });
 
-                            let tool_result =
+                            let mut tool_result =
                                 crate::tools::execute_tool(tool_name, tool_args, &perm);
+                            let denied = tool_result.starts_with("错误：权限不足");
+                            // plan 是硬性只读，和 permission_mode 无关。不把这一点说清楚，
+                            // 用户会以为「我明明把权限设成 full 了」
+                            if denied && mode == Mode::Plan {
+                                // 整段换掉而不是追加：原话里的「改成 full」在 plan 下是错建议，
+                                // 模型会把两条都念给用户，越说越乱
+                                tool_result = "错误：当前工作模式是 plan，它强制只读，\
+                                     改 permission_mode 不会生效。要执行这类命令，\
+                                     需要用户按 Shift-Tab 切到 confirm 或 auto；\
+                                     只想看代码的话用 rg / find / cat。"
+                                    .to_string();
+                            }
                             let ok = !tool_result.starts_with("错误");
                             if !ok {
-                                let first = tool_result.lines().next().unwrap_or("").to_string();
+                                // 界面上一句话就够，完整原因在工具返回里给模型看
+                                let detail = if denied {
+                                    if mode == Mode::Plan {
+                                        "plan 模式强制只读 · Shift-Tab 切到 confirm/auto"
+                                            .to_string()
+                                    } else {
+                                        "permission_mode 是 readonly · 用 /config set 改成 full"
+                                            .to_string()
+                                    }
+                                } else {
+                                    tool_result.lines().next().unwrap_or("").to_string()
+                                };
                                 let _ = events.send(Msg::Tool {
                                     req,
-                                    name: format!("{label} 失败"),
-                                    detail: first,
+                                    name: format!("{label} 被拒绝"),
+                                    detail,
                                     ok: false,
                                 });
                             }
@@ -1876,6 +1899,19 @@ impl Session<'_> {
             "权限模式已保存：{}",
             display_value(&self.app.effective(), "permission_mode")
         )));
+        // 设了 full 却还在 plan 里，是最容易误解的一处：说明白它此刻不生效
+        if self.state.mode == Mode::Plan
+            && !matches!(
+                self.app.effective().permission_mode,
+                crate::tools::PermissionMode::ReadOnly
+            )
+        {
+            self.state.push(Entry::Warn(
+                "当前工作模式是 plan（强制只读），这个权限暂时不生效：\
+                 按 Shift-Tab 切到 confirm 或 auto"
+                    .into(),
+            ));
+        }
         Ok(())
     }
 }
