@@ -201,7 +201,7 @@ flowchart LR
 
 | Mode | Chip | System-prompt contract | Tool gate |
 |---|---|---|---|
-| `plan` | `○ plan` | Analyse only, end with a Markdown vulnerability report | Forced `ReadOnly`; write tools return a refusal so the model keeps producing the report |
+| `plan` | `○ plan · 只读` | Analyse only, end with a Markdown vulnerability report | Forced `ReadOnly`; write tools return a refusal so the model keeps producing the report. Read-only commands (`rg`, `find`, `ls`, `cat`, `git log`) are allowed, so it greps instead of reading files one by one |
 | `confirm` | `◇ confirm` | One change at a time | Each write parks on a `oneshot` channel until you answer — the file is provably untouched while the question is on screen |
 | `auto` | `◆ auto` | Finish the job | Writes apply immediately, subject to the permission mode |
 

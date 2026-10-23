@@ -14,7 +14,7 @@
   <img alt="rust" src="https://img.shields.io/badge/rust-2024-orange">
   <img alt="build" src="https://img.shields.io/badge/build-single%20binary-informational">
   <img alt="status" src="https://img.shields.io/badge/status-early-yellow">
-  <img alt="tests" src="https://img.shields.io/badge/tests-259%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-316%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -42,7 +42,7 @@ Nothing in the normal loop asks the one question that matters: **can this be abu
 
 ```mermaid
 flowchart LR
-    A[("your repo")] --> B["reads only the files<br/>the model asks for"]
+    A[("your repo")] --> B["retrieves the lines<br/>each item needs"]
     B --> C["explains the risk<br/>in plain language"]
     C --> D["proposes a diff"]
     D --> E{"you approve?"}
@@ -91,41 +91,33 @@ vibeguard ping
 
 ## Status
 
-Early, but no longer a demo. Working today:
+Early, but it does real work. Two stages, one report:
 
-- streaming chat, five permission-gated tools, the three work modes
-- conversation history with in-memory search and delete
-- **`/scan [path]`** — 20 local rules drawn from the 410-item checklist: hardcoded secrets,
-  `shell=True`, `eval`, SQL concatenation, ECB mode, `innerHTML`, `CORS *`, Dockerfile running as
-  root, and so on. Every hit carries `file:line` and a CWE id. Read-only, no tokens spent.
-- **`/scan --ai`** — then hands the remaining 390 items to the model and demands a verdict plus
-  evidence for each one: `exists / suspected / not_found / undetermined`. Items that can only be
-  confirmed by running the service (rate limits, brute force, IDOR) are labelled `undetermined`
-  rather than quietly passed.
-- **Each batch sees its own evidence.** Instead of one shared digest, every checklist item is
-  matched against the repo by keyword and the surrounding lines are sent with **line numbers**,
-  so `file:line` answers are counted, not guessed.
-- **It only pays for what changed.** Nothing touched since the last scan → zero requests. One file
-  edited → the model only sees that file, in 3 requests instead of 7, and the verdicts for
-  untouched files carry over. New evidence always wins; an old finding is only dropped when its
-  own file changed.
+| Command | What it costs | What you get |
+|---|---|---|
+| `/scan [path]` | seconds, no tokens | 20 local rules over the 410-item checklist — `file:line` + CWE for every hit |
+| `/scan --ai` | a handful of requests | the model judges the remaining 390 items, each with a verdict and evidence |
+| `/fix [n]` | one request per fix | a diff, and nothing is written until you press `y` |
+| `/report` | free | `vibeguard-report.md` + `.json`, both stating coverage |
 
-- **`/fix [n]`** — asks the model for a fixed version of each file, shows the diff, and writes
-  nothing until you press `y`. In `plan` mode it still shows you the diff, it just never writes.
-  Files that changed on disk while you were reviewing are skipped rather than overwritten.
+**Why the AI pass is not just "ask the model about the repo":**
 
-- **Plan mode can still investigate.** It refuses writes but allows read-only commands (`rg`, `find`, `ls`,
-  `cat`, `git log`), so it greps a repository instead of reading files one at a time — which is the
-  difference between a scan that finishes and one that runs out of rounds.
-- **`/findings`** — reloads the last scan for this directory from `~/.config/vibeguard/scans/`
-  instead of paying for a fresh one. Every file's content hash was recorded at scan time, so it
-  can tell you which findings have gone stale — and `/fix` refuses to touch those.
-- **`/report`** — writes `vibeguard-report.md` (for humans) and `vibeguard-report.json` (for CI)
-  into the scanned directory. Both state the coverage, and both refuse to look complete when a
-  batch failed.
+- Each checklist item is matched against the repository by keyword, and only the surrounding
+  lines are sent — **with line numbers**, so `file:line` answers are counted, not guessed.
+- Evidence is verified before it becomes a finding: the file must exist, the line must be in
+  range, and the line is quoted in the report so you can judge it in two seconds. Anything that
+  cannot be located is dropped and listed separately — it never silently disappears.
+- An unchanged repo costs **zero** requests; one edited file costs 3 instead of 7.
+- Plan mode can still investigate: it refuses writes but allows read-only commands (`rg`, `find`,
+  `ls`, `cat`, `git log`), so it greps instead of reading files one at a time.
 
-Every scan reports exactly how much of the checklist it covered, so "clean" and "not looked at"
-never look the same. The report files are worth adding to your `.gitignore`.
+**How accurate is it?** Measured, not asserted. `cargo test bench` runs a labelled corpus
+(`bench/fixtures`, one seeded instance per local rule) and fails on any miss or false hit — today
+20/20 rules, no noise. The AI tier has no labelled corpus yet, so treat its output as leads, not
+verdicts. Every scan states how much of the checklist it covered, so "clean" and "not looked at"
+never look the same.
+
+The report files are worth adding to your `.gitignore`.
 
 ## Docs
 
