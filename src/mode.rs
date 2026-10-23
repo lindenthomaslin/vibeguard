@@ -60,7 +60,9 @@ impl Mode {
         match self {
             Mode::Plan => {
                 "\n\n【当前模式：计划】只读分析，不要调用 edit_file / write_file 修改任何文件。\
-先用 read_file / list_dir 通读相关代码，确认问题真实存在再下结论，不要凭文件名猜。\
+查代码时优先用 run_command 跑 rg（例如 `rg -n \"pattern\" .`）和 git log/diff 定位，\
+比一个文件一个文件读快得多；read_file 只用在需要看完整上下文的地方。\
+确认问题真实存在再下结论，不要凭文件名猜。\
 最后输出一份 Markdown 漏洞报告：每条包含严重级别、位置（文件:行）、问题说明、风险、\
 修复建议（给出改完之后的代码片段），末尾再给一个按严重程度排序的修复顺序。"
             }

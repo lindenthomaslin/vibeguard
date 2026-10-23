@@ -26,11 +26,18 @@ pub const KEYS: &[&str] = &[
     "temperature",
     "max_tokens",
     "timeout_secs",
+    "max_tool_rounds",
     "permission_mode",
     "workspace_root",
     "theme",
     "font_style",
 ];
+
+/// 默认的工具轮数上限：一个真实的多步任务（读文件 → 改 → 跑测试）二三十轮很常见，
+/// 扫陌生项目时几十轮也正常，所以默认给得比「够用」宽一点
+pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 120;
+/// 上限的上限：再大就不是防死循环，而是等着账单爆炸了
+pub const MAX_TOOL_ROUNDS_CEILING: usize = 500;
 
 /// 按优先级读取的 API Key 环境变量
 pub const API_KEY_ENVS: &[&str] = &["VIBEGUARD_API_KEY", "DEEPSEEK_API_KEY"];
@@ -130,6 +137,9 @@ pub struct Config {
     pub max_tokens: Option<u32>,
     /// 读超时（秒）：两次收到数据之间的最长等待时间
     pub timeout_secs: u64,
+    /// 一轮对话最多几次工具调用。防的是死循环，不是防「活干得多」：
+    /// 扫一个陌生项目动辄几十次读取，给太少会做到一半被砍断
+    pub max_tool_rounds: usize,
     /// 权限模式：只读/可编辑/全权限
     pub permission_mode: PermissionMode,
     /// 工作目录根路径，用于限制工具访问范围；None 时使用启动时的当前目录
@@ -153,6 +163,7 @@ impl Default for Config {
             temperature: 0.0,
             max_tokens: None,
             timeout_secs: 120,
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             permission_mode: PermissionMode::ReadOnly,
             workspace_root: None,
             theme: "dark".to_string(),
@@ -271,6 +282,12 @@ impl Config {
         if self.timeout_secs == 0 {
             bail!("timeout_secs 必须大于 0");
         }
+        if !(1..=MAX_TOOL_ROUNDS_CEILING).contains(&self.max_tool_rounds) {
+            bail!(
+                "max_tool_rounds 取值范围为 1 ~ {MAX_TOOL_ROUNDS_CEILING}，当前为 {}",
+                self.max_tool_rounds
+            );
+        }
         Ok(())
     }
 
@@ -304,6 +321,7 @@ impl Config {
                 .max_tokens
                 .map_or_else(|| "none".to_string(), |n| n.to_string()),
             "timeout_secs" => self.timeout_secs.to_string(),
+            "max_tool_rounds" => self.max_tool_rounds.to_string(),
             "permission_mode" => self.permission_mode.label().to_string(),
             "workspace_root" => self
                 .workspace_root
@@ -359,6 +377,11 @@ impl Config {
                     .parse()
                     .with_context(|| format!("timeout_secs 需要是正整数：{v}"))?
             }
+            "max_tool_rounds" => {
+                self.max_tool_rounds = v
+                    .parse()
+                    .with_context(|| format!("max_tool_rounds 需要是正整数：{v}"))?
+            }
             "permission_mode" => {
                 self.permission_mode = match v.to_lowercase().as_str() {
                     "readonly" => PermissionMode::ReadOnly,
@@ -409,6 +432,7 @@ impl Config {
             "temperature" => self.temperature = d.temperature,
             "max_tokens" => self.max_tokens = d.max_tokens,
             "timeout_secs" => self.timeout_secs = d.timeout_secs,
+            "max_tool_rounds" => self.max_tool_rounds = d.max_tool_rounds,
             "permission_mode" => self.permission_mode = d.permission_mode,
             "workspace_root" => self.workspace_root = d.workspace_root,
             "theme" => self.theme = d.theme,
@@ -628,5 +652,28 @@ mod tests {
     fn key_masking() {
         assert_eq!(mask_key("sk-1234567890abcdef"), "sk-…cdef");
         assert_eq!(mask_key("short"), "****");
+    }
+
+    #[test]
+    fn the_tool_round_limit_is_generous_but_bounded() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.max_tool_rounds, DEFAULT_MAX_TOOL_ROUNDS);
+        assert!(
+            cfg.max_tool_rounds >= 100,
+            "默认值太小的话，扫一个陌生项目就会被砍断"
+        );
+
+        cfg.set("max_tool_rounds", "300").unwrap();
+        assert_eq!(cfg.max_tool_rounds, 300);
+        assert_eq!(cfg.get("max_tool_rounds").unwrap(), "300");
+
+        for bad in ["0", "501", "abc", "-5"] {
+            assert!(cfg.set("max_tool_rounds", bad).is_err(), "{bad} 不该被接受");
+        }
+        // 失败的 set 不能污染已有配置
+        assert_eq!(cfg.max_tool_rounds, 300);
+
+        cfg.unset("max_tool_rounds").unwrap();
+        assert_eq!(cfg.max_tool_rounds, DEFAULT_MAX_TOOL_ROUNDS);
     }
 }

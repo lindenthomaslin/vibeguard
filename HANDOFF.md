@@ -249,6 +249,7 @@ In the history panel (`/sessions`, `/search`):
 | `temperature` | `0.0` | Audit work wants determinism |
 | `max_tokens` | unset | Endpoint default |
 | `timeout_secs` | `120` | Per request |
+| `max_tool_rounds` | `120` | Tool calls per turn before it stops and offers to continue |
 | `permission_mode` | `readonly` | `readonly` / `editable` / `full` |
 | `workspace_root` | unset | Confines tool paths |
 | `theme` | `dark` | `dark` / `light` |

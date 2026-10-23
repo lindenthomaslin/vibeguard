@@ -220,6 +220,7 @@ confirm 那个握手是这段代码里最值得看的地方：`start_chat` 发�
 | `temperature` | `0.0` | 审计要的是确定性 |
 | `max_tokens` | 不设 | 用端点默认值 |
 | `timeout_secs` | `120` | 单个请求 |
+| `max_tool_rounds` | `120` | 一轮对话最多几次工具调用，到顶会停下并问要不要继续 |
 | `permission_mode` | `readonly` | `readonly` / `editable` / `full` |
 | `workspace_root` | 不设 | 限定工具能碰的路径 |
 | `theme` | `dark` | `dark` / `light` |

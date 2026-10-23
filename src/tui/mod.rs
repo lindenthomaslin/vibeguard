@@ -44,10 +44,6 @@ use view::Props;
 /// 同时跑几批判定。3 是折中：再多容易撞上端点的速率限制，反而更慢。
 const CONCURRENT_JUDGEMENTS: usize = 3;
 
-/// 一轮对话最多允许几次工具调用。这个上限是防死循环的，不是防「活干得多」的：
-/// 一个真实的多步任务用掉二三十轮很正常，原来的 10 轮连「读文件 → 改 → 跑测试」都走不完。
-const MAX_TOOL_ROUNDS: usize = 40;
-
 const HINT: &str = "Enter 发送 · Ctrl-J 换行 · Shift-Tab 换模式 · / 命令 · Ctrl-D 退出";
 const BUSY_HINT: &str = "Esc 取消 · PgUp/PgDn 滚动";
 
@@ -551,6 +547,8 @@ impl Session<'_> {
             Mode::Plan => crate::tools::PermissionMode::ReadOnly,
             Mode::Confirm | Mode::Auto => self.app.file.permission_mode,
         };
+        // 轮数上限来自配置：扫陌生项目几十轮很常见，写死一个数总会有人被砍断
+        let max_rounds = self.app.effective().max_tool_rounds;
         // 「本次全部应用」只对当前这一轮有效，下一轮重新问
         self.always_apply.store(false, Ordering::Relaxed);
         let always = self.always_apply.clone();
@@ -575,10 +573,10 @@ impl Session<'_> {
 
             let result: Result<(ChatResponse, Duration, Option<String>)> = loop {
                 rounds += 1;
-                if rounds > MAX_TOOL_ROUNDS {
+                if rounds > max_rounds {
                     let note = format!(
-                        "这一轮已经调用工具 {MAX_TOOL_ROUNDS} 次，先停在这里。\
-                         接着说「继续」我就往下做"
+                        "这一轮已经调用工具 {max_rounds} 次，先停在这里。\
+                         接着说「继续」我就往下做，或者 `/config set max_tool_rounds 300` 调高上限"
                     );
                     break Ok((
                         ChatResponse {

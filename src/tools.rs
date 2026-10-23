@@ -179,9 +179,6 @@ fn _execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Result<V
             edit_file(path, old, new)
         }
         "run_command" => {
-            if !matches!(mode, PermissionMode::Full) {
-                bail!("权限不足：不允许执行命令")
-            }
             let args: serde_json::Map<String, Value> =
                 serde_json::from_str(args_json).map_err(|e| anyhow!("参数格式错误：{e}"))?;
             let cmd = args
@@ -193,6 +190,17 @@ fn _execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Result<V
                 .and_then(|v| v.as_array())
                 .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
+
+            // 只读 / 可编辑模式下放行「只看不改」的命令。
+            // 没有 rg，模型面对一个陌生仓库只能一个文件一个文件读——
+            // 几百个文件的项目，几十轮都读不完，然后撞上限。
+            if !matches!(mode, PermissionMode::Full) && !is_read_only_command(cmd, &cmd_args) {
+                bail!(
+                    "权限不足：{} 模式下只允许查看类命令（rg / ls / cat / git log 等）；\
+                     要执行其他命令请切到 full",
+                    mode.label()
+                )
+            }
 
             // 检查删除命令
             if is_delete_command(cmd, &cmd_args) {
@@ -268,6 +276,61 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<Value> {
     }))
 }
 
+/// 只读模式下允许执行的「查看类」命令。
+///
+/// 用白名单而不是黑名单：这个模式的意义是「绝不改变磁盘」，
+/// 而「这条命令不会写」太难判断——`sort -o`、`find -delete`、
+/// `git diff --output` 都能悄悄落盘，漏一个就破了保证。
+fn is_read_only_command(cmd: &str, args: &[&str]) -> bool {
+    let base = Path::new(cmd)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(cmd);
+
+    // 这些参数能把「只读命令」变成写操作
+    const WRITES: &[&str] = &[
+        "-delete",
+        "-exec",
+        "-execdir",
+        "-ok",
+        "-okdir",
+        "-fprint",
+        "-fprintf",
+        "--output",
+        "--in-place",
+    ];
+    if args
+        .iter()
+        .any(|a| WRITES.contains(a) || a.starts_with("--output="))
+    {
+        return false;
+    }
+
+    match base {
+        "rg" | "grep" | "egrep" | "fgrep" | "ag" | "ack" => true,
+        "ls" | "tree" | "file" | "stat" | "du" | "wc" | "pwd" | "date" | "uname" | "whoami"
+        | "which" => true,
+        "cat" | "head" | "tail" | "nl" | "cut" | "diff" | "cmp" | "jq" => true,
+        // git 只放行只读子命令：push / commit / checkout / clean 一律不放
+        "git" => args.first().is_some_and(|a| {
+            matches!(
+                *a,
+                "log"
+                    | "show"
+                    | "diff"
+                    | "status"
+                    | "blame"
+                    | "grep"
+                    | "ls-files"
+                    | "rev-parse"
+                    | "shortlog"
+                    | "describe"
+            )
+        }),
+        _ => false,
+    }
+}
+
 fn is_delete_command(cmd: &str, args: &[&str]) -> bool {
     let cmd_base = Path::new(cmd)
         .file_name()
@@ -284,6 +347,61 @@ fn is_delete_command(cmd: &str, args: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_only_mode_can_look_but_not_touch() {
+        // 扫描陌生仓库没有 rg 就只能一个文件一个文件读，几十轮都读不完
+        let ok = execute_tool(
+            "run_command",
+            r#"{"cmd":"ls","args":["."]}"#,
+            &PermissionMode::ReadOnly,
+        );
+        assert!(!ok.contains("权限不足"), "{ok}");
+
+        let ok = execute_tool(
+            "run_command",
+            r#"{"cmd":"rg","args":["--files","-g","*.rs"]}"#,
+            &PermissionMode::ReadOnly,
+        );
+        assert!(!ok.contains("权限不足"), "{ok}");
+
+        let git = execute_tool(
+            "run_command",
+            r#"{"cmd":"git","args":["log","--oneline","-3"]}"#,
+            &PermissionMode::ReadOnly,
+        );
+        assert!(!git.contains("权限不足"), "{git}");
+    }
+
+    #[test]
+    fn read_only_mode_refuses_anything_that_could_write() {
+        for args in [
+            r#"{"cmd":"python3","args":["-c","print(1)"]}"#,
+            r#"{"cmd":"git","args":["push"]}"#,
+            r#"{"cmd":"find","args":[".","-delete"]}"#,
+            r#"{"cmd":"git","args":["diff","--output=/tmp/x"]}"#,
+            r#"{"cmd":"sh","args":["-c","ls"]}"#,
+        ] {
+            let out = execute_tool("run_command", args, &PermissionMode::ReadOnly);
+            assert!(out.contains("权限不足"), "应当拒绝：{args} → {out}");
+        }
+    }
+
+    #[test]
+    fn editable_mode_gets_the_same_read_only_allowance() {
+        let out = execute_tool(
+            "run_command",
+            r#"{"cmd":"ls","args":["."]}"#,
+            &PermissionMode::Editable,
+        );
+        assert!(!out.contains("权限不足"), "{out}");
+        let out = execute_tool(
+            "run_command",
+            r#"{"cmd":"rm","args":["-rf","/tmp/nope"]}"#,
+            &PermissionMode::Editable,
+        );
+        assert!(out.contains("权限不足"), "{out}");
+    }
 
     #[test]
     fn read_only_blocks_write() {
