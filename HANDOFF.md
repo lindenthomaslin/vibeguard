@@ -265,8 +265,18 @@ it never panics. Strings with interpolation use `i18n::pick(format!(zh), format!
 
 The table is guarded by tests: no duplicate keys, no empty values, and the number of `{}`
 placeholders must match between the two languages (a mismatch would panic at runtime, not at
-compile time). Model-facing prompts stay in one language on purpose — they are instructions to
-the model, not interface text.
+compile time).
+
+The 410 checklist items are content, not interface text, so they have their own English edition in
+`assets/checklist.en.tsv` (id → title, fix). It is a separate file rather than extra columns in
+`checklist.tsv` because that file is generated and a regeneration would drop them. Lookup is by id
+with a fallback to Chinese, and four tests hold the line: every id has a row, nothing on the English
+side contains Chinese, the language switch picks the right column, and a missing row degrades to
+Chinese rather than to an empty string.
+
+The judgement prompt follows the same switch (`JUDGE_ZH` / `JUDGE_EN` in `scan_ai.rs`), and the
+English one explicitly asks for English `reason` text — without that line the model mirrors the
+Chinese checklist items and answers in Chinese regardless of the framing.
 
 ---
 

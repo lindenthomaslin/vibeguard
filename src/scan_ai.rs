@@ -904,14 +904,14 @@ pub fn prompt(batch: &Batch, index: &Index) -> String {
                 "- {} [{}] {}｜检测点：{}\n",
                 item.id,
                 item.severity.label(),
-                item.title,
+                item.display_title(),
                 item.detect_point
             ),
             format!(
                 "- {} [{}] {} | check: {}\n",
                 item.id,
                 item.severity.label(),
-                item.title,
+                item.display_title(),
                 item.detect_point
             ),
         ));
@@ -1178,7 +1178,7 @@ pub fn to_findings(
         findings.push(crate::finding::Finding {
             id: format!("VG-{:03}", seq_start + findings.len() + 1),
             severity: item.severity,
-            title: item.title.clone(),
+            title: item.display_title().to_string(),
             cwe: item.cwe.clone(),
             file: ev.file,
             line: ev.line,
@@ -1198,7 +1198,7 @@ pub fn to_findings(
                     code
                 ),
             ),
-            suggestion: item.fix_point.clone(),
+            suggestion: item.display_fix().to_string(),
         });
     }
     Merged {

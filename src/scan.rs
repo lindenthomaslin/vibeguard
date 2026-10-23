@@ -519,7 +519,7 @@ fn make_finding(
     Finding {
         id: format!("VG-{:03}", seq + 1),
         severity,
-        title: item.title.clone(),
+        title: item.display_title().to_string(),
         cwe: item.cwe.clone(),
         file: path
             .strip_prefix(root)
@@ -528,7 +528,7 @@ fn make_finding(
             .to_string(),
         line,
         description: format!("[{}] {note}", item.id),
-        suggestion: item.fix_point.clone(),
+        suggestion: item.display_fix().to_string(),
     }
 }
 

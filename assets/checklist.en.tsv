@@ -1,0 +1,413 @@
+# id	title	fix
+# 英文界面用的标题与修复建议。中文原文在 checklist.tsv，检索仍然用那份。
+# 加条目时两边都要加：缺一条，英文界面就会退回中文。
+AUTH-01	Endpoint has no auth middleware; anonymous access works	Enforce at the gateway, declare an explicit allowlist
+AUTH-02	Hardcoded backdoor account or universal password	Remove the backdoor, store credentials hashed
+AUTH-03	Default credentials not forced to change (admin/admin)	Force a change on first login, disable the default account
+AUTH-04	Passwords stored in plaintext	Move to Argon2id/bcrypt and migrate existing rows
+AUTH-05	Weak unsalted hash (MD5/SHA1)	Argon2id with a per-user random salt
+AUTH-06	No password strength or length check	Validate length and a breached-password list server-side
+AUTH-07	No lockout or backoff after failed logins	Count, lock, delay, and add a captcha
+AUTH-08	Usernames or phone numbers can be enumerated	One message for every case, constant response time
+AUTH-09	Verification codes can be tried unlimited times	Single use, attempt limit, bound to the session
+AUTH-10	Verification codes never expire and can be replayed	Five-minute TTL, burn after use
+AUTH-11	Verification code echoed back in the response	Keep it server-side, never return it
+AUTH-12	Password reset token is predictable or never expires	High-entropy random, short TTL, single use
+AUTH-13	Password reset does not check the old password	Require the old password or a second factor
+AUTH-14	Signup has no rate limit or captcha	Rate limit, captcha, phone verification
+AUTH-15	Unverified email gets full access	Require verification for sensitive actions
+AUTH-16	OAuth state is not validated	Bind state to the session and check it
+AUTH-17	OAuth redirect_uri has no allowlist	Exact allowlist match, no wildcards
+AUTH-18	OAuth lacks PKCE or uses the implicit flow	Authorization code flow with PKCE
+AUTH-19	Third-party account linking does not verify ownership	Verify the logged-in identity before linking
+AUTH-20	"Remember me" token never expires	Give it a TTL and rotate it
+AUTH-21	MFA can be skipped by calling the next endpoint directly	Record MFA completion server-side
+AUTH-22	Trusted devices never expire	Expire them periodically, allow remote revoke
+AUTH-23	Logout only clears the frontend, the server session lives on	Revoke the session server-side
+AUTH-24	Authentication enforced in a frontend route guard	Enforce on the server
+AUTHZ-01	IDOR: changing an id reads someone else's record	Every query carries an owner condition
+AUTHZ-02	Vertical privilege escalation: a normal user calls admin endpoints	Role check per route
+AUTHZ-03	Batch endpoint does not authorise each item	Check every item, reject the batch on any failure
+AUTHZ-04	GraphQL field-level authorisation missing	Authorise in the field resolver
+AUTHZ-05	Multi-tenant query missing tenant_id	Inject the tenant scope globally
+AUTHZ-06	Authorisation trusts a role sent by the client	Read the role from the server session only
+AUTHZ-07	No permission matrix, role checks scattered everywhere	One central RBAC/ABAC policy
+AUTHZ-08	File download allows direct object reference	Check ownership before streaming
+AUTHZ-09	Export and report endpoints skip authorisation	Separate authorisation plus row-level filtering
+AUTHZ-10	Internal endpoints unauthenticated (/internal /debug /actuator)	Network isolation and separate authentication
+AUTHZ-11	Admin console shares weak authentication	Separate strong auth plus an IP allowlist
+AUTHZ-12	Share links never expire and can be enumerated	High-entropy code, expiry, revocable
+AUTHZ-13	Permission changes do not take effect (cache)	Short TTL or explicit invalidation
+AUTHZ-14	Soft-deleted rows remain readable	Filter deleted_at in every query
+AUTHZ-15	An old API version bypasses the new authorisation	Retire old versions, one entry point
+AUTHZ-16	List endpoint checks permission, the detail endpoint does not	Guard every entry point the same way
+AUTHZ-17	Update endpoint does not check the owner	The UPDATE carries an owner condition
+AUTHZ-18	Service-to-service calls are unauthenticated	mTLS or service tokens
+AUTHZ-19	A feature flag used as an authorisation check	A flag is not authorisation; check server-side
+SESS-01	JWT signature not verified	Always verify, reject on failure
+SESS-02	Accepts alg=none	Pin an algorithm allowlist
+SESS-03	JWT secret is weak or hardcoded	Strong random key held in a key management service
+SESS-04	exp / nbf not validated	Validate the time claims
+SESS-05	iss / aud not validated	Validate issuer and audience
+SESS-06	Permissions embedded in a long-lived JWT	Short TTL plus a server-side recheck
+SESS-07	Token stored in localStorage	Move it to an HttpOnly cookie
+SESS-08	Token appears in URLs, logs or the Referer	Pass it in a header only
+SESS-09	Refresh token not rotated or never expires	Single-use rotation plus reuse detection
+SESS-10	Logout does not revoke the server session	Server-side denylist or a session version
+SESS-11	Session fixation	Rebuild the session on successful login
+SESS-12	Cookie missing HttpOnly / Secure / SameSite	Enable all three
+SESS-13	Session id is predictable	Generate it with a CSPRNG
+SESS-14	Unlimited concurrent sessions	Cap the count, drop the oldest
+SESS-15	Old sessions survive a password change	Bump a session version to invalidate them all
+SESS-16	CSRF token reusable or never checked	Single use per request, verified server-side
+SESS-17	Double-submit cookie implemented incorrectly	Compare properly and sign the cookie
+SESS-18	Cookie scope too wide (parent domain)	Set Domain precisely
+INJ-01	SQL built by string concatenation	Parameterise every query
+INJ-02	ORM raw / where concatenation	Use bound parameters
+INJ-03	Dynamic ORDER BY or column-name injection	Map through a column allowlist
+INJ-04	LIKE wildcards not escaped	Escape the wildcards
+INJ-05	Second-order injection (stored, then concatenated)	Parameterise end to end
+INJ-06	Blind injection is exploitable	Same fix as SQL injection
+INJ-07	NoSQL operator injection	Strict type checks plus an operator allowlist
+INJ-08	Command injection (exec / spawn concatenation)	Pass an argument array, no shell parsing
+INJ-09	shell=True or string commands	execFile, or an argument array
+INJ-10	SSTI template injection	Sandbox the template, never render user strings
+INJ-11	LDAP injection	Escape metacharacters, parameterise
+INJ-12	XPath injection	Precompiled XPath
+INJ-13	Reflected XSS	Encode output for its context
+INJ-14	Stored XSS	Encode, and sanitise rich text
+INJ-15	DOM XSS	Avoid dangerous sinks, use textContent
+INJ-16	innerHTML / dangerouslySetInnerHTML	textContent, or sanitise first
+INJ-17	Rich text without an allowlist	A strict DOMPurify allowlist
+INJ-18	SVG/HTML upload leads to XSS	Force a download header or a separate domain
+INJ-19	Markdown rendered without sanitising	Sanitise before rendering
+INJ-20	Log injection (CRLF)	Escape newlines and control characters
+INJ-21	HTTP response header injection	Strip CRLF, never let users set headers
+INJ-22	Email header injection	Validate and filter
+INJ-23	CSV/Excel formula injection	Prefix the value with a quote
+INJ-24	Prototype pollution	Filter keys, use Object.create(null)
+INJ-25	ReDoS	Cap the length, rewrite without backtracking
+INJ-26	Client-side template expression injection	Do not compile user input
+INJ-27	eval / new Function code injection	Remove the dynamic execution
+INJ-28	Deserialisation (pickle / yaml / Java / PHP)	JSON plus a type allowlist
+INJ-29	XXE external entities	Disable external entities and DTDs
+INJ-30	Server-side expression injection (EL / OGNL / SpEL)	Never evaluate user expressions
+INPUT-01	Validation only in the frontend	The server is the only trusted validator
+INPUT-02	Type confusion (a string treated as a number)	Strict type conversion
+INPUT-03	Integer overflow or negative numbers	Range validation
+INPUT-04	Unbounded input length	Cap the length and the body size
+INPUT-05	HTTP parameter pollution (HPP)	Take one value and normalise it
+INPUT-06	Mass assignment	Bind through a DTO allowlist
+INPUT-07	Extra fields write into sensitive columns	Field-level allowlist
+INPUT-08	Unicode normalisation bypass	Normalise before validating
+INPUT-09	Case or whitespace bypasses a denylist	Use an allowlist
+INPUT-10	Null byte truncation	Reject null bytes
+INPUT-11	JSON nested deeply enough to DoS	Cap the parse depth
+INPUT-12	XML bomb (entity expansion)	Limit entities and total size
+INPUT-13	Wildcard abuse forces a full table scan	Require at least one real condition
+INPUT-14	Ambiguous date parsing	Strict format and range
+INPUT-15	Floating-point money rounding	Integer cents, or Decimal
+INPUT-16	Mixed encodings (UTF-8 / GBK)	Standardise on UTF-8, reject invalid bytes
+INPUT-17	Frontend and backend validation disagree	One source of truth: the backend
+INPUT-18	Denylist instead of allowlist	Enumerate an allowlist
+INPUT-19	Enum values not constrained	Validate against the enum
+INPUT-20	No upper bound on pagination	Cap at 100, reject beyond
+FILE-01	Only the extension is checked	Magic bytes plus extension
+FILE-02	MIME type and file header unchecked	Read the header to learn the real type
+FILE-03	Stored inside the web root	Object storage or a non-executable directory
+FILE-04	Filename path traversal	Rename to a UUID
+FILE-05	A same-name upload overwrites the old one	UUID plus a version
+FILE-06	No file size limit	A hard server-side cap
+FILE-07	No upload rate limit	Rate limit plus quota
+FILE-08	Images not re-encoded (polyglot file)	Re-encode before storing
+FILE-09	ZIP extraction path traversal	Validate the resolved absolute path
+FILE-10	ZIP bomb	Cap the expansion ratio and the total
+FILE-11	No malware scan	Hook up an antivirus or a sandbox
+FILE-12	Temp files never cleaned up	Scheduled cleanup plus a lifecycle policy
+FILE-13	Direct-to-bucket upload with the wrong permissions	Private bucket plus signed URLs
+FILE-14	Presigned URL too permissive or too long-lived	Least privilege, short expiry
+FILE-15	Download endpoint IDOR	Check file ownership
+FILE-16	Filename echoed back as XSS	Encode the output
+NET-01	SSRF can request any URL	Domain allowlist, block private ranges
+NET-02	SSRF bypasses (decimal IP, short hostnames, DNS rebinding)	Resolve first, then check the real IP
+NET-03	Cloud metadata service reachable	Enforce IMDSv2 and restrict egress
+NET-04	Open redirect	Relative paths or an allowlisted domain only
+NET-05	HTTP request smuggling	Normalise headers at the gateway
+NET-06	Host header injection (reset-link poisoning)	Configure a fixed domain, never trust Host
+NET-07	CORS allows any origin	Exact allowlist match
+NET-08	CORS reflects the Origin header	Do not echo unauthorised origins
+NET-09	No CSP	A strict CSP
+NET-10	Missing HSTS / X-Frame-Options / X-Content-Type-Options	Send every security header
+NET-11	Clickjacking	Restrict frame-ancestors
+NET-12	Mixed content	HTTPS everywhere
+NET-13	Certificate verification disabled	Restore it and configure the CA correctly
+NET-14	Weak TLS version or cipher suite	TLS 1.2+ only
+NET-15	Sensitive data over plain HTTP	Force HTTPS plus HSTS
+NET-16	WebSocket without auth or an Origin check	Authenticate at the handshake, verify Origin
+NET-17	No message rate limit on WebSocket	Rate limit per message
+NET-18	X-Forwarded-For trusted unconditionally	Trust only the known proxy chain
+NET-19	Cache poisoning	Normalise the cache key, filter headers
+NET-20	CDN caches sensitive responses	Cache-Control: private / no-store
+API-01	No rate limiting anywhere	A global limit at the gateway
+API-02	Login endpoint unlimited, credential stuffing	Limit by account and by IP
+API-03	Unlimited SMS or email sends, bombing and cost abuse	Limit by phone, IP and device
+API-04	Unlimited signup or invites, promo abuse	Rate limit, risk control, device fingerprint
+API-05	IP-only rate limiting, bypassed by a proxy pool	Add account and device dimensions
+API-06	IP-only, so one account can hammer	Add a per-user dimension
+API-07	Rate-limit thresholds wrong (too tight or too loose)	Tiered thresholds, tuned with monitoring
+API-08	Rate limiting implemented in the frontend	Enforce on the server or the gateway
+API-09	Per-instance counters make the limit useless	Count centrally in Redis
+API-10	No 429 and no Retry-After	Standard status code and header
+API-11	Sensitive actions without a second factor	Re-confirm plus OTP
+API-12	No idempotency key, duplicate payments	Idempotency-Key plus a unique constraint
+API-13	No request body size limit	Cap at 1 MB and reject early
+API-14	No request timeout	Timeouts end to end
+API-15	No concurrency limit, the pool exhausts	Semaphore plus a pool cap
+API-16	Batch endpoint without an item cap	Cap at 100, reject beyond
+API-17	Unbounded pagination, deep pages collapse	Cursor pagination plus a maximum page
+API-18	Sort and filter parameters injectable	Map through a field allowlist
+API-19	Error responses leak stack traces, SQL or paths	One error code plus redaction
+API-20	Error codes inconsistent, clients parse the message	One error contract
+API-21	Success responses carry extra fields (hash, token, internal id)	Serialise through a DTO allowlist
+API-22	Error messages enable user enumeration	One message for every case
+API-23	No API versioning, old versions never retired	Version plus a retirement plan
+API-24	Debug endpoints exposed (swagger / actuator / debug)	Off in production
+API-25	GraphQL without depth or complexity limits	Cap depth and complexity
+API-26	GraphQL introspection open in production	Disable introspection
+API-27	GraphQL batching bypasses the rate limit	Count per operation
+API-28	REST methods misused (GET with side effects)	Follow the method semantics
+API-29	Content-Type not validated	Match strictly, reject odd types
+API-30	HTTP method override header accepted	Disable method override
+API-31	Parameter pollution bypasses authorisation	Parse once and authorise the same value
+API-32	Endpoint returns everything (over-exposure)	Trim the response per case
+API-33	No request id, failures are untraceable	A traceId end to end
+API-34	Public API without signatures or replay protection	Signature, nonce, time window
+API-35	Public API without quota or tenant isolation	Quota plus tenant isolation
+API-36	Webhook without signature verification	HMAC plus a time window
+API-37	Webhook URL unchecked, SSRF	Allowlist, block private ranges
+API-38	Unlimited long-poll or SSE connections	Cap the connection count
+API-39	Streaming download without a speed limit	Rate limit plus authorisation
+API-40	Health check leaks dependencies and versions	Return up/down only
+API-41	OPTIONS leaks internal methods	Narrow the Allow header
+API-42	Unlimited keys and nesting (DoS)	Cap key count and depth
+API-43	No bot or crawler protection	Risk control plus behaviour analysis
+API-44	Short links or share codes enumerable	High-entropy codes plus rate limiting
+API-45	Callback or redirect URL unchecked (open redirect)	Domain allowlist
+CRYPTO-01	Home-grown crypto	Use standard algorithms and libraries
+CRYPTO-02	AES-ECB mode	GCM, or CBC with HMAC
+CRYPTO-03	Fixed or predictable IV	A random IV sent with the ciphertext
+CRYPTO-04	Hardcoded key	KMS or an environment variable
+CRYPTO-05	Key stored next to the ciphertext	Separate storage, isolated permissions
+CRYPTO-06	No key rotation	Version the keys and rotate on a schedule
+CRYPTO-07	Weak RNG for tokens	Use a CSPRNG
+CRYPTO-08	Reversible encryption for passwords	A one-way hash
+CRYPTO-09	No salt, or a fixed salt	A random salt per user
+CRYPTO-10	Hash iteration count too low	cost >= 12, or Argon2id
+CRYPTO-11	Password sent in plaintext	HTTPS, and never log it
+CRYPTO-12	Sensitive columns stored unencrypted	Field-level encryption
+CRYPTO-13	Sensitive fields written to logs	One redaction middleware
+CRYPTO-14	Signature algorithm can be downgraded	Pin an algorithm allowlist
+CRYPTO-15	Timestamp and nonce unchecked, replay possible	Time window plus a nonce cache
+CRYPTO-16	Encryption without authentication (no MAC or AEAD)	Use AEAD (GCM)
+CRYPTO-17	Padding oracle	One error response for every failure
+CRYPTO-18	Key too short	At least 256 bit
+CRYPTO-19	Test keys reach production	Environment isolation plus a startup check
+CRYPTO-20	IV stored in plaintext next to the key	Separate storage
+CONF-01	Hardcoded secret in source	Move it to a secret manager
+CONF-02	.env committed to the repo	.gitignore, and rotate immediately
+CONF-03	Frontend bundle contains a secret	Proxy the call through the backend
+CONF-04	service_role or a private key shipped to the client	Anonymous key only, with RLS on
+CONF-05	Secret leaked in git history (file already deleted)	Rotate the secret and scrub the history
+CONF-06	Logs or crash reports contain secrets	Redact before reporting
+CONF-07	CI variables visible to fork PRs	Isolate secrets and permissions
+CONF-08	DEBUG mode shipped	Force it off in production
+CONF-09	Full stack traces shown to users	One error page
+CONF-10	Directory listing enabled	Turn autoindex off
+CONF-11	Default admin path reachable	Change the path and add strong auth
+CONF-12	Database exposed to the internet	Private network plus an IP allowlist
+CONF-13	Database with a weak or missing password	Strong password plus IAM auth
+CONF-14	Redis or MQ without authentication	requirepass plus a private network
+CONF-15	Object storage publicly readable or writable	Private bucket, least-privilege policy
+CONF-16	Cloud IAM permissions too broad (*)	Split into least privilege
+CONF-17	Long-lived access key never rotated	Switch to temporary credentials
+CONF-18	Container runs as root	Run as a non-root user
+CONF-19	Privileged container, or docker.sock mounted	Remove the privilege and the mount
+CONF-20	Kubernetes dashboard or etcd exposed	Private network plus RBAC
+CONF-21	Security group open to 0.0.0.0/0	Open the minimum
+CONF-22	Backup files downloadable (.bak / .git / .DS_Store)	Deny web access
+CONF-23	Source maps shipped	Off in production, or uploaded privately
+CONF-24	Environment variables can override critical config	Validate the config schema at startup
+CONF-25	Config has no schema, a bad value takes effect silently	Validate at startup and fail fast
+BIZ-01	Price or amount comes from the client	Price on the server, the client only displays
+BIZ-02	Discounts and coupons stack	Mutual-exclusion rules, computed server-side
+BIZ-03	Negative amounts or quantities	Positive check plus bounds
+BIZ-04	Inventory oversold	Atomic decrement plus optimistic locking
+BIZ-05	Duplicate orders	Idempotency key plus a unique constraint
+BIZ-06	Payment amount differs from the order amount	Compare server-side before charging
+BIZ-07	Payment callback without signature verification	Verify the signature, the amount and the order
+BIZ-08	Payment callback can be replayed	Idempotent, deduplicated notifications
+BIZ-09	Order state machine can skip states	Validate transitions server-side
+BIZ-10	Over-refund, or a refund repeated	Cumulative check plus idempotency
+BIZ-11	Withdrawal without risk control	Rules plus manual review
+BIZ-12	Concurrent balance or points decrement	Row lock or an atomic update
+BIZ-13	Trial and free quota can be reset	Bind to identity, device or payment
+BIZ-14	Invite rewards can be self-referred	Check device and payment
+BIZ-15	Coupons enumerable	High-entropy codes plus a claim limit
+BIZ-16	Flash sale without queueing or warm-up	Queue, cache, purchase limit
+BIZ-17	Lottery odds predictable	Server-side CSPRNG
+BIZ-18	Purchase limit enforced only in the frontend	Count server-side
+BIZ-19	Membership entitlement not checked	Check it on every use
+BIZ-20	Someone else's order can be cancelled	Check order ownership
+BIZ-21	State transition without server validation	A server-side state machine
+BIZ-22	Approval flow allows self-approval	Separation of duties
+BIZ-23	Export without row or permission limits	Cap, approval, row-level filtering
+BIZ-24	Batch operations without confirmation	Confirm, plus soft delete
+BIZ-25	Delete without soft delete or a recycle bin	Soft delete plus a retention window
+BIZ-26	Counter fields writable by the client (likes, sales)	Computed server-side, never written by clients
+BIZ-27	Time window not validated (expired still works)	Validate the expiry server-side
+BIZ-28	Region or compliance restrictions not enforced	Enforce server-side, use IP as a hint
+BIZ-29	Free trial charges automatically once a card is entered	State it plainly, add a confirm step
+BIZ-30	Frontend and backend compute discounts in a different order	One calculation source
+DATA-01	Over-collecting personal data	Collect the minimum necessary
+DATA-02	No privacy policy or consent record	Explicit consent, recorded
+DATA-03	Logs contain PII, passwords or tokens	Redact, field allowlist
+DATA-04	Analytics sends sensitive fields	Allowlist the fields
+DATA-05	Export endpoint without masking	Mask plus permission control
+DATA-06	Crash reports include the full request body	Filter sensitive keys
+DATA-07	No right-to-erasure implementation	Cascading delete plus an async job
+DATA-08	No data export for the user	Offer self-service export
+DATA-09	Backups contain plaintext sensitive data	Encrypted backups plus access control
+DATA-10	Production data in test environments	Masked or synthetic data
+DATA-11	Sensitive columns unencrypted	Field-level encryption
+DATA-12	Third-party SDK sends user data back	Minimise it, constrain by contract
+DATA-13	Cross-border transfer not assessed	Compliance assessment plus localisation
+DATA-14	No data retention period	Archive and delete on a schedule
+DATA-15	Auto-increment ids leak business volume	UUID or snowflake ids
+DATA-16	Response contains other people's data (over-return)	Trim by permission
+DATA-17	Cache or queue retains sensitive data	TTL plus encryption plus cleanup
+DATA-18	Sensitive data in localStorage	Move it out, or encrypt it
+FE-01	Sensitive logic in the frontend (pricing, risk, permissions)	Move it to the server
+FE-02	Frontend contains internal addresses or secrets	Proxy via the backend, ship no credentials
+FE-03	No CSP	A strict CSP with reporting
+FE-04	Third-party scripts without SRI	Add integrity, or self-host
+FE-05	postMessage does not check origin	Check origin and source
+FE-06	target=_blank without rel=noopener	Add rel=noopener noreferrer
+FE-07	CDN dependencies without integrity checks	SRI, or self-host critical libraries
+FE-08	Frontend routing without permission checks	Check server-side; the frontend is UX only
+FE-09	No error boundary, the page goes blank	An ErrorBoundary plus a fallback UI
+FE-10	Form can be submitted repeatedly	Disable the button plus idempotency
+FE-11	Autofill leaks sensitive fields	Disable autofill on them
+FE-12	Excessive device permissions	Ask on demand, explain why
+FE-13	URL parameter injection (deep links)	Validate and encode
+FE-14	Embeddable in any iframe	frame-ancestors
+FE-15	Local storage never expires	Add a TTL and cleanup
+FE-16	Stale cache breaks after an update	Version the assets, force a refresh
+FE-17	Sensitive information not masked in the UI	Show it masked
+SUP-01	Hallucinated package names (slopsquatting)	Dependency allowlist plus human confirmation
+SUP-02	Look-alike package names (typosquatting)	Allowlist plus source verification
+SUP-03	Deprecated package pulled in	Replace it with a maintained alternative
+SUP-04	Malicious postinstall script	Install without scripts, in a sandbox
+SUP-05	No lockfile	Commit the lockfile, verify it in CI
+SUP-06	Version ranges too wide (^ / ~)	Pin exact versions
+SUP-07	Dependency count ballooning	Trim; write it yourself when you can
+SUP-08	Known CVEs not scanned	Wire SCA into CI and block on it
+SUP-09	Base image tag=latest	Pin the digest
+SUP-10	Image from an untrusted source	Official sources, verify image signatures
+SUP-11	Build script curls a remote script and runs it	Pin the version, verify the hash
+SUP-12	Private registry unauthenticated, or falls back to public	Force the private registry with auth
+SUP-13	Package signature or hash not verified	Turn on integrity checks
+SUP-14	Transitive dependencies unaudited	Full audit on a schedule
+SUP-15	Licence conflict (GPL contamination)	Legal review, replace the package
+SUP-16	Generated code copies a copyrighted snippet	Rewrite it, run a licence review
+INFRA-01	Admin ports exposed to the internet	Private network or VPN only
+INFRA-02	Security group too open	Minimum exposure, per environment
+INFRA-03	No WAF	Put a WAF in front
+INFRA-04	No DDoS protection	Cloud protection plus rate limiting
+INFRA-05	Object storage ACL wrong	Private bucket plus a bucket policy
+INFRA-06	Snapshots or images shared publicly	Make them private, audit the shares
+INFRA-07	Cloud function triggerable without auth	Authentication plus a signature
+INFRA-08	Message queue without authentication	Auth plus a private network
+INFRA-09	Scheduled job triggerable from outside	Auth plus a private network
+INFRA-10	Container escape risk	Minimum capabilities, read-only root filesystem
+INFRA-11	Kubernetes RBAC too broad	Least privilege plus namespace isolation
+INFRA-12	Secrets stored in plaintext ConfigMaps	Use Secret plus KMS
+INFRA-13	Log shipping without redaction	Redact before shipping
+INFRA-14	No backups, or backups that cannot be restored	Rehearse restores, keep an offsite copy
+INFRA-15	Single point, no high availability	Multi-AZ deployment
+INFRA-16	No resource quota (compute abuse)	Quota plus budget alerts
+INFRA-17	Unrestricted egress (used as a proxy)	Egress allowlist
+INFRA-18	Metadata service not hardened (IMDSv1)	Force IMDSv2 plus a hop limit
+INFRA-19	No cloud audit log	Enable auditing and retain it
+INFRA-20	IaC drift	Periodic drift detection
+AVAIL-01	No timeouts	Timeouts end to end
+AVAIL-02	No retry backoff	Exponential backoff with jitter
+AVAIL-03	Unlimited retries cause a storm	Retry cap plus a circuit breaker
+AVAIL-04	Connection pool unbounded	Pool cap plus a wait timeout
+AVAIL-05	Large files read into memory whole	Stream them
+AVAIL-06	No backpressure, the queue grows forever	Bounded queue plus a rejection policy
+AVAIL-07	Deadlock, or locks held too broadly	Consistent lock order plus timeouts
+AVAIL-08	Race condition (TOCTOU)	Atomic operation or transaction
+AVAIL-09	Scheduled job overlaps itself	Distributed lock
+AVAIL-10	Cache stampede	Cache the empty result, randomise the TTL
+AVAIL-11	Cache and database disagree	Write the DB, drop the cache, delete again after a delay
+AVAIL-12	No circuit breaking or degradation	Circuit breaker plus a fallback
+AVAIL-13	Blocking calls to external services	Go async, or use a queue
+AVAIL-14	Huge long-running transactions	Split them
+AVAIL-15	No graceful shutdown	Drain traffic, let the work finish
+AVAIL-16	File handle or connection leak	Release in finally
+AVAIL-17	Event listener leak	Remove listeners
+AVAIL-18	No health check or readiness probe	Add liveness and readiness
+AVAIL-19	In-process cache makes instances disagree	Use a shared cache
+AVAIL-20	Clock skew causes logic errors	NTP sync
+OPS-01	No audit log	Record who, what, when, before and after
+OPS-02	Logs contain sensitive information	Redact
+OPS-03	Users can inject fake log lines	Escape control characters
+OPS-04	No alerts on key metrics	Set alert thresholds
+OPS-05	Exceptions swallowed (empty catch)	Log, report, fail explicitly
+OPS-06	No request tracing id	A traceId through the whole chain
+OPS-07	No error aggregation platform	Wire up a Sentry-style service
+OPS-08	No anomaly monitoring on request rate	Monitor plus alert
+OPS-09	No detection of abnormal logins	Risk rules plus alerts
+OPS-10	No rollback plan	One-click rollback, rehearsed
+OPS-11	No canary release or feature flag	Canary plus feature flags
+OPS-12	No rotation process after a key leak	A playbook, rehearsed regularly
+AGENT-01	Direct prompt injection (repo, docs, web page)	Isolate untrusted content; separate instructions from data
+AGENT-02	Indirect prompt injection (tool output)	Treat tool output as data, never as instructions
+AGENT-03	Tool permissions too broad (shell, DB, cloud)	Least privilege plus a sandbox
+AGENT-04	Credentials can be read and exfiltrated	Isolate credentials, control egress
+AGENT-05	Dependencies installed automatically	Forbid auto-install, require approval
+AGENT-06	Untrusted MCP server	Allowlist plus audit logging
+AGENT-07	Poisoned MCP tool description	Human review before enabling
+AGENT-08	Auto-commit or auto-deploy without a gate	Human approval plus branch protection
+AGENT-09	Write access to production	Read-only plus temporary grants
+AGENT-10	Infinite loop or no budget cap	Step limit plus a budget breaker
+AGENT-11	Context with sensitive data uploaded	Redact, or self-host the model
+AGENT-12	Generated code contains a hidden backdoor	Mandatory review; write critical paths yourself
+AGENT-13	Training-data feedback leaks internal code	Enterprise tier, opt out of training
+AGENT-14	Model output executed directly (eval / SQL)	Allowlist plus parameterisation; never execute it directly
+AGENT-15	Agent logs leak user data	Redact, set a retention period
+AGENT-16	Trust passed between agents	Re-authenticate at every hop
+AGENT-17	Memory or vector store poisoned	Validate writes, isolate tenants
+AGENT-18	RAG knowledge base retrieved across permissions	Filter by permission before retrieving
+AGENT-19	Model output rendered directly, XSS	Sanitise before rendering
+AGENT-20	High-risk actions without human confirmation	Human in the loop
+QUAL-01	Hallucinated APIs or methods that do not exist	Type checking plus tests as a backstop
+QUAL-02	Wrong argument order or type	Type annotations plus API tests
+QUAL-03	Empty catch swallows the exception	Log, report, fail explicitly
+QUAL-04	Silent fallback returns fake data	Fail explicitly, never fake success
+QUAL-05	Edge cases unhandled (null, empty, zero)	Unit tests over the edges
+QUAL-06	Floating-point money arithmetic	Integer cents or Decimal
+QUAL-07	Timezone and date handling wrong	Store everything in UTC
+QUAL-08	Concurrency race	Lock, or use an atomic operation
+QUAL-09	Resource never released	Release in finally
+QUAL-10	Dead code and duplicate implementations	Refactor and merge
+QUAL-11	any / ts-ignore everywhere	Turn on strict
+QUAL-12	Lint or type checking disabled	Enforce it in CI
+QUAL-13	No tests, or only the happy path	Cover the edges and the failures
+QUAL-14	Tests share the implementation's blind spot	Write the critical cases by hand
+QUAL-15	Layering broken	Layer constraints plus a lint rule
+QUAL-16	Hardcoded magic values and URLs	Move them into config
+QUAL-17	No input validation	One validation layer
+QUAL-18	Misleading error messages	Say what actually happened
+QUAL-19	No migration rollback script	Provide a down script
+QUAL-20	Environments differ (works locally, dies in prod)	Containers plus config validation

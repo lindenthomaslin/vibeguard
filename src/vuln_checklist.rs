@@ -12,6 +12,12 @@ use std::collections::HashMap;
 /// 编译进二进制的清单。改 `assets/checklist.tsv` 后重新 `cargo build` 即可生效。
 const CHECKLIST_TSV: &str = include_str!("../assets/checklist.tsv");
 
+/// 英文界面用的标题与修复建议，按 id 挂在上面那份清单上。
+///
+/// 单独一个文件而不是给 checklist.tsv 加列：那份是生成的，重跑生成器会把加进去的列冲掉。
+/// 缺 id 就退回中文——少一句译文不该让扫描跑不起来。
+const CHECKLIST_EN_TSV: &str = include_str!("../assets/checklist.en.tsv");
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VulnItem {
     /// 清单编号，如 `AUTH-01`
@@ -24,6 +30,12 @@ pub struct VulnItem {
     pub detect_point: String,
     /// 修复要点
     pub fix_point: String,
+    /// 英文标题；空表示这份清单没有英文版，显示时退回中文
+    #[serde(default)]
+    pub title_en: String,
+    /// 英文修复建议
+    #[serde(default)]
+    pub fix_en: String,
     /// 对应的 CWE 编号，没有就是 `None`
     pub cwe: Option<String>,
 }
@@ -40,12 +52,63 @@ impl Default for VulnChecklist {
     }
 }
 
+impl VulnItem {
+    /// 标题按界面语言取。英文缺失时退回中文——宁可露出一句中文，
+    /// 也不要显示空字符串让整行看不出是什么问题。
+    pub fn display_title(&self) -> &str {
+        self.title_in(crate::i18n::current())
+    }
+
+    /// 修复建议，同上
+    pub fn display_fix(&self) -> &str {
+        self.fix_in(crate::i18n::current())
+    }
+
+    /// 指定语言取标题。分开一个方法是为了能测——界面语言是进程级的全局状态，
+    /// 测试里切来切去会互相干扰。
+    pub fn title_in(&self, lang: crate::i18n::Lang) -> &str {
+        pick_text(lang, &self.title, &self.title_en)
+    }
+
+    pub fn fix_in(&self, lang: crate::i18n::Lang) -> &str {
+        pick_text(lang, &self.fix_point, &self.fix_en)
+    }
+}
+
+fn pick_text<'a>(lang: crate::i18n::Lang, zh: &'a str, en: &'a str) -> &'a str {
+    if lang == crate::i18n::Lang::Zh || en.is_empty() {
+        zh
+    } else {
+        en
+    }
+}
+
 // `by_category` / `by_severity` / `categories` 是给第二阶段（按分类分批喂给模型）准备的，
 // 现在只有测试在用；先留着，比删掉再写回来便宜。
 #[allow(dead_code)]
 impl VulnChecklist {
     pub fn new() -> Self {
-        Self::from_tsv(CHECKLIST_TSV)
+        Self::from_tsv_with_en(CHECKLIST_TSV, CHECKLIST_EN_TSV)
+    }
+
+    /// 主清单 + 英文覆盖层
+    pub fn from_tsv_with_en(text: &str, en_text: &str) -> Self {
+        let mut list = Self::from_tsv(text);
+        let overlay: HashMap<&str, (&str, &str)> = en_text
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+            .filter_map(|l| {
+                let cells: Vec<&str> = l.split('\t').collect();
+                (cells.len() >= 3).then(|| (cells[0].trim(), (cells[1].trim(), cells[2].trim())))
+            })
+            .collect();
+        for item in &mut list.items {
+            if let Some((title, fix)) = overlay.get(item.id.as_str()) {
+                item.title_en = (*title).to_string();
+                item.fix_en = (*fix).to_string();
+            }
+        }
+        list
     }
 
     /// 解析 TSV。格式：`id \t 等级 \t 分类 \t 标题 \t 检测点 \t 修复要点 \t CWE`。
@@ -131,6 +194,8 @@ fn parse_row(line: &str) -> Option<VulnItem> {
         title: cells[3].to_string(),
         detect_point: cells[4].to_string(),
         fix_point: cells[5].to_string(),
+        title_en: String::new(),
+        fix_en: String::new(),
         cwe: (!cwe.is_empty() && cwe != "—").then(|| cwe.to_string()),
     })
 }
@@ -195,5 +260,54 @@ GOOD-02\tlow\tA. 分类\t标题\t检测点\t修复要点\t
         assert_eq!(ids, ["GOOD-01", "GOOD-02"]);
         assert_eq!(list.get("GOOD-01").unwrap().severity, Severity::High);
         assert_eq!(list.get("GOOD-02").unwrap().cwe, None, "空 CWE 应当是 None");
+    }
+    #[test]
+    fn every_item_has_an_english_title_and_fix() {
+        let list = VulnChecklist::new();
+        let missing: Vec<&str> = list
+            .all()
+            .iter()
+            .filter(|i| i.title_en.is_empty() || i.fix_en.is_empty())
+            .map(|i| i.id.as_str())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "这些条目没有英文版，英文界面会露出中文：{missing:?}"
+        );
+    }
+
+    #[test]
+    fn the_english_side_has_no_chinese_left_in_it() {
+        let han = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let list = VulnChecklist::new();
+        for item in list.all() {
+            assert!(!han(&item.title_en), "{} 的英文标题还是中文", item.id);
+            assert!(!han(&item.fix_en), "{} 的英文建议还是中文", item.id);
+        }
+    }
+
+    #[test]
+    fn the_language_switch_picks_the_right_column() {
+        use crate::i18n::Lang;
+        let list = VulnChecklist::new();
+        let item = list.get("AUTHZ-01").expect("AUTHZ-01");
+        assert_eq!(item.title_in(Lang::Zh), item.title);
+        assert_eq!(item.title_in(Lang::En), item.title_en);
+        assert_ne!(item.title_in(Lang::En), item.title);
+        assert_eq!(item.fix_in(Lang::En), item.fix_en);
+    }
+
+    #[test]
+    fn a_missing_english_row_falls_back_to_chinese() {
+        use crate::i18n::Lang;
+        let zh = "AUTH-01\tcritical\tA. 认证\t中文标题\t检测点\t中文建议\tCWE-306\n";
+        let list = VulnChecklist::from_tsv_with_en(zh, "");
+        let item = list.get("AUTH-01").unwrap();
+        assert_eq!(
+            item.title_in(Lang::En),
+            "中文标题",
+            "缺英文时不能变成空字符串"
+        );
+        assert_eq!(item.fix_in(Lang::En), "中文建议");
     }
 }
