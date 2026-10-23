@@ -116,11 +116,25 @@ Early, but it does real work. Two stages, one report:
 - Plan mode can still investigate: it refuses writes but allows read-only commands (`rg`, `find`,
   `ls`, `cat`, `git log`), so it greps instead of reading files one at a time.
 
-**How accurate is it?** Measured, not asserted. `cargo test bench` runs a labelled corpus
-(`bench/fixtures`, one seeded instance per local rule) and fails on any miss or false hit — today
-20/20 rules, no noise. The AI tier has no labelled corpus yet, so treat its output as leads, not
-verdicts. Every scan states how much of the checklist it covered, so "clean" and "not looked at"
-never look the same.
+**How accurate is it?** Measured, not asserted.
+
+The local rules have a corpus: `cargo test bench` runs `bench/fixtures` — one seeded instance per
+rule — and fails on any miss or false hit. Today 20/20, no noise.
+
+The model tier has its own: `vibeguard bench` runs a small app with **15 planted vulnerabilities
+and 8 traps** (code that looks dangerous and isn't), then scores hit / miss / duplicate / false
+positive. Last full run on `deepseek-flash`, 83k tokens:
+
+| | |
+|---|---|
+| recall | **15/15** |
+| precision | **78.9%** |
+| reports per real bug | **2.7** (22 of the 41 were the same line under a second checklist id) |
+| traps reported | **1 of 8** |
+
+Read that as: it does not miss what is planted, and it is noisy — roughly three findings for every
+one real problem. Deduplicating same-line reports is the next number to move. Every scan also
+states how much of the checklist it covered, so "clean" and "not looked at" never look the same.
 
 The report files are worth adding to your `.gitignore`.
 

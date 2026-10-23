@@ -1,5 +1,4 @@
 mod app;
-#[cfg(test)]
 mod bench;
 mod chat;
 mod commands;
@@ -75,6 +74,18 @@ enum Command {
     /// 用示例数据预览扫描与修复界面，不读取也不修改任何文件
     #[command(hide = true)]
     Demo,
+    /// 用标注集量模型判定的精确率/召回率（会花 token）
+    Bench {
+        /// 标注集目录
+        #[arg(default_value = "bench/ai")]
+        dir: PathBuf,
+        /// 把这次的结果存成 JSON，之后可以离线重打分
+        #[arg(long, value_name = "FILE")]
+        save: Option<PathBuf>,
+        /// 直接给一份存下来的结果打分，不调用模型
+        #[arg(long, value_name = "FILE", conflicts_with = "save")]
+        score: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -133,6 +144,9 @@ async fn run(cli: Cli) -> Result<()> {
         None => repl::run(&mut app).await,
         Some(Command::Ping) => commands::ping(&app).await,
         Some(Command::Demo) => review::run_demo(),
+        Some(Command::Bench { dir, save, score }) => {
+            bench::run(&dir, &app.effective(), save.as_deref(), score.as_deref()).await
+        }
         Some(Command::Config { action }) => match action {
             None if console::user_attended() => commands::wizard(&mut app).await,
             None | Some(ConfigAction::Show) => {

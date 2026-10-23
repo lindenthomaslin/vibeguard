@@ -25,7 +25,6 @@ use anyhow::{Context, Result, bail};
 use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
 use crossterm::execute;
 use form::ModelSettings;
-use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -40,9 +39,6 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use unicode_width::UnicodeWidthStr;
 use view::Props;
-
-/// 同时跑几批判定。3 是折中：再多容易撞上端点的速率限制，反而更慢。
-const CONCURRENT_JUDGEMENTS: usize = 3;
 
 /// 底部那行快捷键提示
 fn hint() -> &'static str {
@@ -1764,143 +1760,19 @@ impl Session<'_> {
                     crate::scan_ai::SECURITY_CATEGORIES
                 },
             );
-            let total = batches.len();
-
-            // 并发跑：串行 7 批 × 十几秒就是两分钟的干等。3 路是折中——
-            // 再多容易撞上端点的速率限制，反而更慢。
-            let client = std::sync::Arc::new(client);
-            let index = std::sync::Arc::new(index);
-            let results = futures_util::stream::iter(batches.into_iter().enumerate())
-                .map(|(i, batch)| {
-                    let client = std::sync::Arc::clone(&client);
-                    let index = std::sync::Arc::clone(&index);
-                    let tx = tx.clone();
-                    async move {
-                        let _ = tx.send(Msg::ScanProgress(
-                            req,
-                            crate::i18n::pick(
-                                format!(
-                                    "模型判定 {}/{total}：{}（{} 条）",
-                                    i + 1,
-                                    batch.label,
-                                    batch.items.len()
-                                ),
-                                format!(
-                                    "Judging {}/{total}: {} ({} items)",
-                                    i + 1,
-                                    batch.label,
-                                    batch.items.len()
-                                ),
-                            ),
-                        ));
-                        let messages = [Message::user(crate::scan_ai::prompt(&batch, &index))];
-                        // 60 条判定大约 2~3k tokens；给 8000 是留出「模型先想一段」
-                        // 的余量——思考型模型会把额度烧在 reasoning 上，
-                        // 4000 时实测 7 批里有 6 批返回空内容
-                        let opts = ChatOptions {
-                            json: true,
-                            max_tokens: Some(8000),
-                            tools: Vec::new(),
-                        };
-                        let result = client.chat(&messages, &opts).await;
-                        (batch, result)
-                    }
-                })
-                .buffer_unordered(CONCURRENT_JUDGEMENTS)
-                .collect::<Vec<_>>()
-                .await;
-
-            let mut judgements = Vec::new();
-            let mut failed = Vec::new();
-            let mut tokens = 0u64;
-            // 解析不了的批次先留着：对半拆开重跑往往就好了
-            let mut retry: Vec<crate::scan_ai::Batch> = Vec::new();
-            for (batch, result) in results {
-                match result {
-                    Ok(resp) => {
-                        tokens += resp.usage.as_ref().map(|u| u.total_tokens).unwrap_or(0);
-                        match crate::scan_ai::parse(&resp.content) {
-                            Ok(v) if !v.is_empty() => judgements.extend(v),
-                            // 空内容 / 截断都可能是「60 条中文理由超出了输出预算」，
-                            // 先不记失败，拆开再试
-                            _ => retry.push(batch),
-                        }
-                    }
-                    Err(e) => failed.push(format!("{}（{e:#}）", batch.label)),
-                }
-            }
-
-            // 拆半重试：只拆一层，避免模型一直吐不完整时无限递归。
-            // 重试也走并发，否则 7 批各拆两半、串行跑要等好几分钟。
-            let mut halves: Vec<crate::scan_ai::Batch> = Vec::new();
-            for batch in retry {
-                let label = batch.label.clone();
-                match batch.split() {
-                    Some((a, b)) => halves.extend([a, b]),
-                    None => failed.push(pick(
-                        format!("{label}（只有一条，返回的 JSON 不完整）"),
-                        format!("{label} (single item, returned incomplete JSON)"),
-                    )),
-                }
-            }
-            let retried = futures_util::stream::iter(halves)
-                .map(|half| {
-                    let client = std::sync::Arc::clone(&client);
-                    let index = std::sync::Arc::clone(&index);
-                    let tx = tx.clone();
-                    async move {
-                        let _ = tx.send(Msg::ScanProgress(
-                            req,
-                            pick(
-                                format!("重试（拆半）：{}（{} 条）", half.label, half.items.len()),
-                                format!(
-                                    "Retry (split): {} ({} items)",
-                                    half.label,
-                                    half.items.len()
-                                ),
-                            ),
-                        ));
-                        let messages = [Message::user(crate::scan_ai::prompt(&half, &index))];
-                        let opts = ChatOptions {
-                            json: true,
-                            max_tokens: Some(8000),
-                            tools: Vec::new(),
-                        };
-                        let result = client.chat(&messages, &opts).await;
-                        (half, result)
-                    }
-                })
-                .buffer_unordered(CONCURRENT_JUDGEMENTS)
-                .collect::<Vec<_>>()
-                .await;
-
-            for (half, result) in retried {
-                match result {
-                    Ok(resp) => {
-                        tokens += resp.usage.as_ref().map(|u| u.total_tokens).unwrap_or(0);
-                        match crate::scan_ai::parse(&resp.content) {
-                            Ok(v) if !v.is_empty() => judgements.extend(v),
-                            Ok(_) => failed.push(pick(
-                                format!("{}（拆半后仍没有判定）", half.label),
-                                format!("{} (no verdict even after splitting)", half.label),
-                            )),
-                            Err(e) => failed.push(pick(
-                                format!(
-                                    "{}（拆半后仍失败：{e:#}；正文 {} 字）",
-                                    half.label,
-                                    resp.content.chars().count()
-                                ),
-                                format!(
-                                    "{} (still failing after splitting: {e:#}; body {} chars)",
-                                    half.label,
-                                    resp.content.chars().count()
-                                ),
-                            )),
-                        }
-                    }
-                    Err(e) => failed.push(format!("{}（{e:#}）", half.label)),
-                }
-            }
+            let progress_tx = tx.clone();
+            let judged = crate::scan_ai::judge(
+                std::sync::Arc::new(client),
+                std::sync::Arc::new(index),
+                batches,
+                move |msg| {
+                    let _ = progress_tx.send(Msg::ScanProgress(req, msg));
+                },
+            )
+            .await;
+            let judgements = judged.judgements;
+            let failed = judged.failed;
+            let tokens = judged.tokens;
 
             // 增量：这一轮只看了变过的文件，和上次的结论合起来才是完整的
             let judgements = match (&prev, incremental) {

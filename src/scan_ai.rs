@@ -1167,6 +1167,165 @@ pub fn to_findings(
     }
 }
 
+/// 同时跑几批。串行 7 批 × 十几秒就是两分钟的干等；再多容易撞上端点限流，
+/// 反而更慢。
+const CONCURRENT_JUDGEMENTS: usize = 3;
+
+/// 单批的输出预算。60 条判定大约 2~3k tokens，给 8000 是留出「模型先想一段」
+/// 的余量——思考型模型会把额度烧在 reasoning 上，4000 时实测 7 批里有 6 批
+/// 返回空内容。
+const MAX_JUDGE_TOKENS: u32 = 8000;
+
+/// 一轮判定的结果
+pub struct Judged {
+    pub judgements: Vec<Judgement>,
+    /// 跑失败的批次说明（覆盖不全，报告里必须写出来）
+    pub failed: Vec<String>,
+    pub tokens: u64,
+}
+
+/// 并发跑完所有批次；解析不出判定的批次对半拆开重试一次。
+///
+/// TUI 和标注集都走这一条路径。两边各写一遍的话，改了一边忘了另一边，
+/// 标出来的数字就不代表用户实际看到的行为。
+pub async fn judge(
+    client: std::sync::Arc<crate::llm::LlmClient>,
+    index: std::sync::Arc<Index>,
+    batches: Vec<Batch>,
+    progress: impl Fn(String) + Send + Sync + 'static,
+) -> Judged {
+    use crate::llm::{ChatOptions, Message};
+    use futures_util::StreamExt;
+
+    let total = batches.len();
+    let progress = std::sync::Arc::new(progress);
+
+    let run = |batch: Batch, i: usize| {
+        let client = std::sync::Arc::clone(&client);
+        let index = std::sync::Arc::clone(&index);
+        let progress = std::sync::Arc::clone(&progress);
+        async move {
+            progress(pick(
+                format!(
+                    "模型判定 {}/{total}：{}（{} 条）",
+                    i + 1,
+                    batch.label,
+                    batch.items.len()
+                ),
+                format!(
+                    "Judging {}/{total}: {} ({} items)",
+                    i + 1,
+                    batch.label,
+                    batch.items.len()
+                ),
+            ));
+            let messages = [Message::user(prompt(&batch, &index))];
+            let opts = ChatOptions {
+                json: true,
+                max_tokens: Some(MAX_JUDGE_TOKENS),
+                tools: Vec::new(),
+            };
+            let result = client.chat(&messages, &opts).await;
+            (batch, result)
+        }
+    };
+
+    let results = futures_util::stream::iter(batches.into_iter().enumerate())
+        .map(|(i, batch)| run(batch, i))
+        .buffer_unordered(CONCURRENT_JUDGEMENTS)
+        .collect::<Vec<_>>()
+        .await;
+
+    let mut judgements = Vec::new();
+    let mut failed = Vec::new();
+    let mut tokens = 0u64;
+    // 解析不了的批次先留着：对半拆开重跑往往就好了
+    let mut retry: Vec<Batch> = Vec::new();
+    for (batch, result) in results {
+        match result {
+            Ok(resp) => {
+                tokens += resp.usage.as_ref().map(|u| u.total_tokens).unwrap_or(0);
+                match parse(&resp.content) {
+                    Ok(v) if !v.is_empty() => judgements.extend(v),
+                    // 空内容 / 截断都可能是「60 条中文理由超出了输出预算」，先不记失败
+                    _ => retry.push(batch),
+                }
+            }
+            Err(e) => failed.push(format!("{}（{e:#}）", batch.label)),
+        }
+    }
+
+    // 拆半重试：只拆一层，避免模型一直吐不完整时无限递归
+    let mut halves: Vec<Batch> = Vec::new();
+    for batch in retry {
+        let label = batch.label.clone();
+        match batch.split() {
+            Some((a, b)) => halves.extend([a, b]),
+            None => failed.push(pick(
+                format!("{label}（只有一条，返回的 JSON 不完整）"),
+                format!("{label} (single item, returned incomplete JSON)"),
+            )),
+        }
+    }
+    let retried = futures_util::stream::iter(halves)
+        .map(|half| {
+            let client = std::sync::Arc::clone(&client);
+            let index = std::sync::Arc::clone(&index);
+            let progress = std::sync::Arc::clone(&progress);
+            async move {
+                progress(pick(
+                    format!("重试（拆半）：{}（{} 条）", half.label, half.items.len()),
+                    format!("Retry (split): {} ({} items)", half.label, half.items.len()),
+                ));
+                let messages = [Message::user(prompt(&half, &index))];
+                let opts = ChatOptions {
+                    json: true,
+                    max_tokens: Some(MAX_JUDGE_TOKENS),
+                    tools: Vec::new(),
+                };
+                let result = client.chat(&messages, &opts).await;
+                (half, result)
+            }
+        })
+        .buffer_unordered(CONCURRENT_JUDGEMENTS)
+        .collect::<Vec<_>>()
+        .await;
+
+    for (half, result) in retried {
+        match result {
+            Ok(resp) => {
+                tokens += resp.usage.as_ref().map(|u| u.total_tokens).unwrap_or(0);
+                match parse(&resp.content) {
+                    Ok(v) if !v.is_empty() => judgements.extend(v),
+                    Ok(_) => failed.push(pick(
+                        format!("{}（拆半后仍没有判定）", half.label),
+                        format!("{} (no verdict even after splitting)", half.label),
+                    )),
+                    Err(e) => failed.push(pick(
+                        format!(
+                            "{}（拆半后仍失败：{e:#}；正文 {} 字）",
+                            half.label,
+                            resp.content.chars().count()
+                        ),
+                        format!(
+                            "{} (still failing after splitting: {e:#}; body {} chars)",
+                            half.label,
+                            resp.content.chars().count()
+                        ),
+                    )),
+                }
+            }
+            Err(e) => failed.push(format!("{}（{e:#}）", half.label)),
+        }
+    }
+
+    Judged {
+        judgements,
+        failed,
+        tokens,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

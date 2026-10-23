@@ -280,6 +280,9 @@ src/
 bench/
   fixtures/      一个样例仓库，每条本地规则各埋一处
   expected.tsv   手工维护的期望值——`cargo test bench` 算准召
+  ai/
+    fixtures/    15 处真问题 + 8 处陷阱（看着可疑但其实安全）的小应用
+    expected.tsv 标注指向 marker 注释，`vibeguard bench` 给模型层打分
 assets/
   checklist.tsv  清单本体——编号、级别、分类、检测点、修复要点、CWE
   vibe-coding-checklist.md  生成 TSV 的源文档
@@ -291,7 +294,7 @@ assets/
 
 ```bash
 cargo build
-cargo test          # 259 通过；2 个已知失败在死掉的扫描器模块里
+cargo test          # 333 通过
 cargo clippy --all-targets
 ```
 
@@ -300,6 +303,33 @@ cargo clippy --all-targets
 - **`state.rs` 不碰终端，`view.rs` 不改状态。** 界面能不开 pty 就测，靠的就是这条。
 - **能写成纯函数的一律写成纯函数。** 布局、diff、折叠、按显示宽度截断，都有单测。
 - **模式不是一个标签。** 加任何跟模式有关的行为，`Mode::instruction()` 和工具闸门**两处都要改**，否则两边迟早对不上。
+
+### 量模型层
+
+`cargo test bench` 只证明那 20 条正则是对的。剩下三百多条要靠模型判断的，「会不会漏」和
+「会不会瞎报」是两个问题，所以另有一套标注集：
+
+```bash
+vibeguard bench                     # 约 8 万 tokens：跑一遍 bench/ai
+vibeguard bench --save run.json     # 把结果存下来
+vibeguard bench --score run.json    # 改了口径就离线重打分，不再花 token
+```
+
+打分分四类，不是两类：
+
+- **命中**：某条标注被报到了（同文件、行号差 ≤3，每条标注只算一次）
+- **同址重复**：真问题那一行又被换了另一个清单编号报了一遍。不是瞎报，但是噪音
+- **误报**：对不上任何标注；落在「故意安全」代码上的单独记 **陷阱命中**
+- **漏报**：没人报
+
+精确率只算「命中 /（命中 + 误报）」，重复既不美化也不冤枉分数；重复单独以「每个真问题多报几条」
+呈现——那才是决定用户信不信这份清单的数字。
+
+标注指向 `# bench:名字` 的 marker 注释而不是写死行号，挪代码不会让标注悄悄失效；
+marker 找不到或出现两次，测试会红。
+
+最近一次完整跑的数字写在 README 里。有批次跑挂（额度、网络）时，报告会**在最前面**说清楚——
+不完整的跑不能当测量结果。
 
 ---
 

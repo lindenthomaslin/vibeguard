@@ -315,6 +315,9 @@ src/
 bench/
   fixtures/      A small repo with one seeded instance of every local rule
   expected.tsv   What must be found, by hand — `cargo test bench` scores precision/recall
+  ai/
+    fixtures/    A small app with 15 planted bugs and 8 traps (safe code that looks unsafe)
+    expected.tsv Labels point at marker comments — `vibeguard bench` scores the model tier
 assets/
   checklist.tsv  The checklist itself — id, severity, category, detect, fix, CWE
   vibe-coding-checklist.md   The source document the TSV is generated from
@@ -326,7 +329,7 @@ assets/
 
 ```bash
 cargo build
-cargo test          # 259 pass; 2 known failures in the dead scanner module
+cargo test          # 333 pass
 cargo clippy --all-targets
 ```
 
@@ -338,6 +341,36 @@ Conventions worth keeping:
   truncation all have unit tests.
 - **The mode is not a label.** If you add behaviour that depends on the mode, put it in
   `Mode::instruction()` *and* in the tool gate, or the two will drift.
+
+### Measuring the model tier
+
+`cargo test bench` only proves the 20 regex rules are right. The ~340 items that need the model
+have their own corpus, because "does it miss things" and "does it make things up" are different
+questions there.
+
+```bash
+vibeguard bench                     # ~80k tokens: runs the AI tier over bench/ai
+vibeguard bench --save run.json     # keep the findings
+vibeguard bench --score run.json    # re-score offline after changing the scoring rules
+```
+
+Scoring is four buckets, not two:
+
+- **hit** — a label was found (same file, line within 3, one finding per label)
+- **duplicate** — a second report on a line that already counted. Not a false claim, but it is
+  noise: the model likes to name the same line under two checklist ids
+- **false positive** — matches no label; **trap hit** is the subset landing on deliberately safe code
+- **miss** — a label nobody reported
+
+Precision is hits over hits + false positives, so duplicates neither flatter nor damn the score;
+they are reported separately as "extra reports per bug", which is the number that decides whether
+a user trusts the list at all.
+
+Labels point at `# bench:name` marker comments rather than hard-coded line numbers, so moving code
+does not silently invalidate the corpus. A test fails if a marker is missing or appears twice.
+
+Numbers from the last complete run are in the README. If batches fail (quota, network) the report
+says so at the top — an incomplete run is not a measurement.
 
 ---
 
