@@ -21,6 +21,7 @@ use crate::repl::SYSTEM_PROMPT;
 use crate::sessions::{Conversation, Store, format_ago};
 use crate::theme::{FontStyle, Look, Theme};
 use crate::ui;
+use futures_util::StreamExt;
 use anyhow::{Context, Result, bail};
 use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
 use crossterm::execute;
@@ -39,6 +40,9 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use unicode_width::UnicodeWidthStr;
 use view::Props;
+
+/// 同时跑几批判定。3 是折中：再多容易撞上端点的速率限制，反而更慢。
+const CONCURRENT_JUDGEMENTS: usize = 3;
 
 const HINT: &str = "Enter 发送 · Ctrl-J 换行 · Shift-Tab 换模式 · / 命令 · Ctrl-D 退出";
 const BUSY_HINT: &str = "Esc 取消 · PgUp/PgDn 滚动";
@@ -1067,32 +1071,54 @@ impl Session<'_> {
             let checklist = crate::vuln_checklist::VulnChecklist::new();
             let batches = crate::scan_ai::batches(&checklist, &crate::scan::covered_ids());
             let total = batches.len();
+
+            // 并发跑：串行 7 批 × 十几秒就是两分钟的干等。3 路是折中——
+            // 再多容易撞上端点的速率限制，反而更慢。
+            let client = std::sync::Arc::new(client);
+            let digest = std::sync::Arc::new(digest);
+            let results = futures_util::stream::iter(batches.into_iter().enumerate())
+                .map(|(i, batch)| {
+                    let client = std::sync::Arc::clone(&client);
+                    let digest = std::sync::Arc::clone(&digest);
+                    let tx = tx.clone();
+                    async move {
+                        let _ = tx.send(Msg::ScanProgress(
+                            req,
+                            format!(
+                                "模型判定 {}/{total}：{}（{} 条）",
+                                i + 1,
+                                batch.label,
+                                batch.items.len()
+                            ),
+                        ));
+                        let messages = [Message::user(crate::scan_ai::prompt(&batch, &digest))];
+                        let opts = ChatOptions {
+                            json: true,
+                            max_tokens: Some(4000),
+                            tools: Vec::new(),
+                        };
+                        let result = client.chat(&messages, &opts).await;
+                        (batch.label, result)
+                    }
+                })
+                .buffer_unordered(CONCURRENT_JUDGEMENTS)
+                .collect::<Vec<_>>()
+                .await;
+
             let mut judgements = Vec::new();
             let mut failed = Vec::new();
             let mut tokens = 0u64;
-
-            for (i, batch) in batches.iter().enumerate() {
-                let _ = tx.send(Msg::ScanProgress(
-                    req,
-                    format!("模型判定 {}/{total}：{}（{} 条）", i + 1, batch.label, batch.items.len()),
-                ));
-                let prompt = crate::scan_ai::prompt(batch, &digest);
-                let messages = [Message::user(prompt)];
-                let opts = ChatOptions {
-                    json: true,
-                    max_tokens: Some(4000),
-                    tools: Vec::new(),
-                };
-                match client.chat(&messages, &opts).await {
+            for (label, result) in results {
+                match result {
                     Ok(resp) => {
                         tokens += resp.usage.as_ref().map(|u| u.total_tokens).unwrap_or(0);
                         match crate::scan_ai::parse(&resp.content) {
                             Ok(v) if !v.is_empty() => judgements.extend(v),
-                            Ok(_) => failed.push(format!("{}（返回里没有判定）", batch.label)),
-                            Err(e) => failed.push(format!("{}（{e:#}）", batch.label)),
+                            Ok(_) => failed.push(format!("{label}（返回里没有判定）")),
+                            Err(e) => failed.push(format!("{label}（{e:#}）")),
                         }
                     }
-                    Err(e) => failed.push(format!("{}（{e:#}）", batch.label)),
+                    Err(e) => failed.push(format!("{label}（{e:#}）")),
                 }
             }
 

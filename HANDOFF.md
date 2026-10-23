@@ -322,15 +322,16 @@ Conventions worth keeping:
 
 ## 11. Known gaps and next steps
 
-1. **`/fix`.** Findings are stored in `AppState::findings` and the per-fix review UI already
-   exists (`review.rs`, `Entry::Card`); what is missing is turning a finding into a diff.
-3. **No CI.** `cargo test` plus `cargo clippy -D warnings` on push would have caught the drift.
-4. **No licence, no CI.** `README.md` covers the landing page; the licence is still unchosen,
-   which makes the repo technically all-rights-reserved.
-5. **`run_command` has no sandbox.** It is opt-in and blocks deletes, but a determined prompt can
+1. **No CI.** `cargo test` plus `cargo clippy -D warnings` on push would have caught several of the
+   drifts already fixed by hand.
+2. **No licence.** The repo is technically all-rights-reserved.
+3. **`run_command` has no sandbox.** It is opt-in and blocks deletes, but a determined prompt can
    still do damage at `full` permission. A path and command allowlist belongs here.
-6. **One conversation open at a time.** Opening a session replaces the current one; there is no
-   side-by-side compare.
+4. **Scan results have no expiry.** They live in memory until you quit; there is no resume. `/fix`
+   against a stale result re-reads each file before writing, so it fails safe — but it fails late.
+5. **One conversation open at a time.** Opening a session replaces the current one.
+6. **The runtime tier is not covered.** ~158 of the 410 checklist items can only be confirmed by
+   sending requests at a running service. The tool labels them `undetermined` and stops there.
 
 ---
 
