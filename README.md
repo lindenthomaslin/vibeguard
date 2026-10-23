@@ -106,8 +106,12 @@ Early, but no longer a demo. Working today:
   nothing until you press `y`. In `plan` mode it still shows you the diff, it just never writes.
   Files that changed on disk while you were reviewing are skipped rather than overwritten.
 
+- **`/report`** — writes `vibeguard-report.md` (for humans) and `vibeguard-report.json` (for CI)
+  into the scanned directory. Both state the coverage, and both refuse to look complete when a
+  batch failed.
+
 Every scan reports exactly how much of the checklist it covered, so "clean" and "not looked at"
-never look the same.
+never look the same. The report files are worth adding to your `.gitignore`.
 
 ## Docs
 

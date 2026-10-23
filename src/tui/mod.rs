@@ -428,10 +428,13 @@ impl Session<'_> {
                 self.state
                     .findings
                     .extend(crate::scan_ai::to_findings(&judgements, &list, seq));
+                self.state.judgements = judgements.clone();
+                self.state.failed_batches = failed.clone();
                 self.state.push(Entry::ScanAi { judgements, failed });
             }
             Msg::ScanDone(req, report) if req == self.req => {
                 self.finish_task();
+                self.state.files_scanned = report.files_scanned;
                 self.state.findings = report.findings.clone();
                 self.state.push(Entry::Scan(Box::new(report)));
             }
@@ -785,6 +788,64 @@ impl Session<'_> {
 
     /// `/sessions` 和 `/search` 共用：读一遍目录，把列表和正文开头交给面板，
     /// 之后过滤都在内存里做
+    /// `/report [路径]`
+    ///
+    /// 把最近一次扫描落成两份文件：`.md` 给人看，`.json` 给 CI 看。
+    /// 传路径时按「去掉扩展名的主干」处理，两份都写在它旁边。
+    fn write_report(&mut self, args: &[&str]) -> Result<()> {
+        if self.state.findings.is_empty() && self.state.judgements.is_empty() {
+            bail!("还没有扫描结果，先跑 /scan 或 /scan --ai");
+        }
+        let base = match args.first() {
+            Some(p) => {
+                let mut path = std::path::PathBuf::from(p);
+                path.set_extension("");
+                path
+            }
+            None => self.scan_root.join("vibeguard-report"),
+        };
+        if let Some(dir) = base.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("创建目录失败：{}", dir.display()))?;
+        }
+
+        let meta = crate::report::Meta {
+            root: ui::tilde(&self.scan_root),
+            when: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            local_rules: crate::scan::covered_ids().len(),
+            checklist_total: crate::vuln_checklist::VulnChecklist::new().len(),
+            files_scanned: self.state.files_scanned,
+            failed: self.state.failed_batches.clone(),
+        };
+        let md = crate::report::markdown(&self.state.findings, &self.state.judgements, &meta);
+        let js = crate::report::json(&self.state.findings, &self.state.judgements, &meta);
+
+        let md_path = base.with_extension("md");
+        let json_path = base.with_extension("json");
+        std::fs::write(&md_path, md)
+            .with_context(|| format!("写入失败：{}", md_path.display()))?;
+        std::fs::write(&json_path, js)
+            .with_context(|| format!("写入失败：{}", json_path.display()))?;
+
+        self.state.push(Entry::Success(format!(
+            "报告已写入 {}（共 {} 个问题）",
+            ui::tilde(&md_path),
+            self.state.findings.len()
+        )));
+        self.state
+            .push(Entry::Info(format!("同一份数据的机器可读版本：{}", ui::tilde(&json_path))));
+        // 空报告最容易骗人，这里再说一遍覆盖了多少
+        if self.state.findings.is_empty() {
+            self.state.push(Entry::Warn(format!(
+                "这份报告是「没发现问题」，不是「没有问题」——它只看了清单里的 {}/{} 条",
+                (meta.local_rules + self.state.judgements.len()).min(meta.checklist_total),
+                meta.checklist_total
+            )));
+        }
+        Ok(())
+    }
+
     /// `/fix [数量] [编号]`
     ///
     /// 拿 `/scan` 的结果去让模型生成修复，然后走逐条确认。真正写盘发生在
@@ -1100,6 +1161,7 @@ impl Session<'_> {
             "resume" => self.resume_latest()?,
             "scan" => self.start_scan(&args)?,
             "fix" => self.start_fix(&args)?,
+            "report" => self.write_report(&args)?,
             "sessions" | "history" => self.open_sessions_panel("")?,
             // 关键词直接带进面板的搜索框，进去还能继续改
             "search" => self.open_sessions_panel(&args.join(" "))?,

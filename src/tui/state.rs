@@ -18,6 +18,7 @@ pub const COMMANDS: &[Candidate] = &[
     Candidate { name: "/mode", desc: "切换工作模式：计划 / 逐条确认 / 全自动" },
     Candidate { name: "/scan", desc: "扫描目录：本地规则；加 --ai 让模型逐条判定（/scan 路径 --ai）" },
     Candidate { name: "/fix", desc: "为扫描结果生成修复，逐条确认后写入（/fix 数量 或 /fix VG-003）" },
+    Candidate { name: "/report", desc: "把扫描结果导出成 .md + .json（/report 路径）" },
     Candidate { name: "/theme", desc: "切换配色：dark / light（Ctrl-T）" },
     Candidate { name: "/font", desc: "切换字形：default / anime" },
     Candidate { name: "/permissions", desc: "配置权限模式和工作目录" },
@@ -120,6 +121,12 @@ pub struct AppState {
     pub sessions: Option<SessionsPanel>,
     /// 最近一次扫描的结果，`/fix` 之后会用到
     pub findings: Vec<Finding>,
+    /// 最近一次模型判定（`/report` 要写进报告，包括「不存在」和「无法判断」）
+    pub judgements: Vec<crate::scan_ai::Judgement>,
+    /// 最近一次扫描了多少个文件，报告里要写
+    pub files_scanned: usize,
+    /// 判定失败的批次。报告里必须写出来，否则「覆盖 230/410」会显得很完整
+    pub failed_batches: Vec<String>,
     /// 有值表示这一轮只走界面、不写文件，值就是原因（演示 / 计划模式 / 只读权限）
     dry_run: Option<String>,
     /// `/model` 表单；打开时键盘输入都交给它
@@ -142,6 +149,9 @@ impl AppState {
             interrupted: false,
             sessions: None,
             findings: Vec::new(),
+            judgements: Vec::new(),
+            files_scanned: 0,
+            failed_batches: Vec::new(),
             dry_run: None,
             form: None,
             mode: Mode::default(),
@@ -1128,11 +1138,10 @@ mod tests {
     #[test]
     fn only_the_commands_that_actually_work_are_listed() {
         let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
-        // /scan 和 /fix 现在都能真的干活；/report 还没有，不列出来误导人
-        for done in ["/scan", "/fix"] {
+        // 扫描、修复、导出现在都能真的干活
+        for done in ["/scan", "/fix", "/report"] {
             assert!(names.contains(&done), "{done} 已经能用，命令该在列表里");
         }
-        assert!(!names.contains(&"/report"), "/report 还没实现，不该出现");
         assert!(names.contains(&"/mode"));
     }
 

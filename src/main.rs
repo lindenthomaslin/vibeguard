@@ -11,6 +11,7 @@ mod llm;
 mod mode;
 mod prompt;
 mod repl;
+mod report;
 mod review;
 mod scan;
 mod scan_ai;
