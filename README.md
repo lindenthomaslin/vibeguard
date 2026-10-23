@@ -111,7 +111,7 @@ Early, but no longer a demo. Working today:
   nothing until you press `y`. In `plan` mode it still shows you the diff, it just never writes.
   Files that changed on disk while you were reviewing are skipped rather than overwritten.
 
-- **Plan mode can still investigate.** It refuses writes but allows read-only commands (`rg`, `ls`,
+- **Plan mode can still investigate.** It refuses writes but allows read-only commands (`rg`, `find`, `ls`,
   `cat`, `git log`), so it greps a repository instead of reading files one at a time — which is the
   difference between a scan that finishes and one that runs out of rounds.
 - **`/findings`** — reloads the last scan for this directory from `~/.config/vibeguard/scans/`

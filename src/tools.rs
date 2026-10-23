@@ -97,7 +97,8 @@ pub fn tool_definitions() -> Vec<Tool> {
         },
         Tool {
             name: "run_command".to_string(),
-            description: "执行终端命令（需要全权限，删除命令除外）".to_string(),
+            description: "执行终端命令。只读 / 可编辑模式下仅允许查看类命令                 （rg、grep、find、fd、ls、tree、cat、head、tail、wc、diff、jq、                 git log/diff/show/status/blame 等），不能跑 python、sed、awk；                 full 模式下可执行任意命令（删除命令除外）"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -196,8 +197,10 @@ fn _execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Result<V
             // 几百个文件的项目，几十轮都读不完，然后撞上限。
             if !matches!(mode, PermissionMode::Full) && !is_read_only_command(cmd, &cmd_args) {
                 bail!(
-                    "权限不足：{} 模式下只允许查看类命令（rg / ls / cat / git log 等）；\
-                     要执行其他命令请切到 full",
+                    "权限不足：{} 模式只允许查看类命令（rg / find / ls / cat / head / tail / \
+                     git log 等）。找文件用 `rg --files` 或 `find . -name \"*.ts\"`，\
+                     搜内容用 `rg -n 模式 路径`；确实要执行其他命令，\
+                     请让用户 `/config set permission_mode full`",
                     mode.label()
                 )
             }
@@ -276,6 +279,46 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<Value> {
     }))
 }
 
+/// 只读 / 可编辑模式下允许执行的「查看类」命令。
+/// 找文件（find / fd）、看内容（cat / head / tail）、搜内容（rg / grep）、
+/// 看历史（git log / diff）都在这里——缺一个，模型就会绕路去读整个文件。
+pub const READ_ONLY_COMMANDS: &[&str] = &[
+    "rg",
+    "grep",
+    "egrep",
+    "fgrep",
+    "ag",
+    "ack",
+    "find",
+    "fd",
+    "ls",
+    "tree",
+    "file",
+    "stat",
+    "du",
+    "df",
+    "wc",
+    "pwd",
+    "date",
+    "uname",
+    "whoami",
+    "which",
+    "realpath",
+    "basename",
+    "dirname",
+    "cat",
+    "head",
+    "tail",
+    "nl",
+    "cut",
+    "diff",
+    "cmp",
+    "jq",
+    "md5",
+    "shasum",
+    "sha256sum",
+];
+
 /// 只读模式下允许执行的「查看类」命令。
 ///
 /// 用白名单而不是黑名单：这个模式的意义是「绝不改变磁盘」，
@@ -306,13 +349,9 @@ fn is_read_only_command(cmd: &str, args: &[&str]) -> bool {
         return false;
     }
 
-    match base {
-        "rg" | "grep" | "egrep" | "fgrep" | "ag" | "ack" => true,
-        "ls" | "tree" | "file" | "stat" | "du" | "wc" | "pwd" | "date" | "uname" | "whoami"
-        | "which" => true,
-        "cat" | "head" | "tail" | "nl" | "cut" | "diff" | "cmp" | "jq" => true,
-        // git 只放行只读子命令：push / commit / checkout / clean 一律不放
-        "git" => args.first().is_some_and(|a| {
+    // git 只放行只读子命令：push / commit / checkout / clean 一律不放
+    if base == "git" {
+        return args.first().is_some_and(|a| {
             matches!(
                 *a,
                 "log"
@@ -326,9 +365,9 @@ fn is_read_only_command(cmd: &str, args: &[&str]) -> bool {
                     | "shortlog"
                     | "describe"
             )
-        }),
-        _ => false,
+        });
     }
+    READ_ONLY_COMMANDS.contains(&base)
 }
 
 fn is_delete_command(cmd: &str, args: &[&str]) -> bool {
@@ -371,6 +410,39 @@ mod tests {
             &PermissionMode::ReadOnly,
         );
         assert!(!git.contains("权限不足"), "{git}");
+
+        // find 是最基础的查找命令：漏掉它，模型就只能去读整个目录
+        let find = execute_tool(
+            "run_command",
+            r#"{"cmd":"find","args":[".","-maxdepth","1","-name","Cargo.toml"]}"#,
+            &PermissionMode::ReadOnly,
+        );
+        assert!(!find.contains("权限不足"), "{find}");
+    }
+
+    #[test]
+    fn a_refused_command_says_what_to_use_instead() {
+        let out = execute_tool(
+            "run_command",
+            r#"{"cmd":"sed","args":["-i","s/a/b/","x"]}"#,
+            &PermissionMode::ReadOnly,
+        );
+        assert!(out.contains("权限不足"));
+        assert!(out.contains("rg --files"), "要给出替代写法：{out}");
+        assert!(
+            out.contains("permission_mode full"),
+            "也要说明怎么放开：{out}"
+        );
+    }
+
+    #[test]
+    fn the_read_only_list_covers_the_obvious_ways_to_look_around() {
+        for cmd in ["find", "fd", "rg", "ls", "cat", "head", "tail", "wc", "git"] {
+            assert!(
+                READ_ONLY_COMMANDS.contains(&cmd) || cmd == "git",
+                "{cmd} 应当能查"
+            );
+        }
     }
 
     #[test]
