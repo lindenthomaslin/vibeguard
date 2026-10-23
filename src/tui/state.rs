@@ -16,7 +16,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 pub const COMMANDS: &[Candidate] = &[
     Candidate { name: "/model", desc: "配置 API 地址、API Key、模型与思考力度" },
     Candidate { name: "/mode", desc: "切换工作模式：计划 / 逐条确认 / 全自动" },
-    Candidate { name: "/scan", desc: "扫描目录：本地规则，给出文件:行号（/scan 路径）" },
+    Candidate { name: "/scan", desc: "扫描目录：本地规则；加 --ai 让模型逐条判定（/scan 路径 --ai）" },
     Candidate { name: "/theme", desc: "切换配色：dark / light（Ctrl-T）" },
     Candidate { name: "/font", desc: "切换字形：default / anime" },
     Candidate { name: "/permissions", desc: "配置权限模式和工作目录" },

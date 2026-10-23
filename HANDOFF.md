@@ -92,7 +92,7 @@ Be precise about this: the conversational core is real, the scanner is a skeleto
 | Themes (dark / light) and glyph styles (default / anime) | ✓ works |
 | `vibeguard config show / init / set`, `vibeguard ping` | ✓ works |
 | `/scan [path]` — 20 local rules over the 410-item checklist | ✓ works, read-only, `file:line` + CWE |
-| AI semantic pass over the remaining ~390 items | ✗ next milestone |
+| `/scan --ai` — model judges the remaining 390 items, 60 per batch | ✓ works, costs tokens |
 | `/demo` — scan → report → per-fix review screens | ~ sample data only, touches no files |
 | CI, packaging, licence | ✗ not yet |
 
@@ -320,10 +320,7 @@ Conventions worth keeping:
 
 ## 11. Known gaps and next steps
 
-1. **The AI pass.** 20 of 410 items are decided by local rules; the rest need the model to read
-   the code. Design: batch the checklist by category, hand it the relevant files, require
-   `存在 / 疑似 / 不存在 / 无法判断` plus a `file:line` for every verdict — never a bare "looks fine".
-2. **`/fix`.** Findings are stored in `AppState::findings` and the per-fix review UI already
+1. **`/fix`.** Findings are stored in `AppState::findings` and the per-fix review UI already
    exists (`review.rs`, `Entry::Card`); what is missing is turning a finding into a diff.
 3. **No CI.** `cargo test` plus `cargo clippy -D warnings` on push would have caught the drift.
 4. **No licence, no CI.** `README.md` covers the landing page; the licence is still unchosen,

@@ -20,7 +20,7 @@ use crate::repl::SYSTEM_PROMPT;
 use crate::sessions::{Conversation, Store, format_ago};
 use crate::theme::{FontStyle, Look, Theme};
 use crate::ui;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
 use crossterm::execute;
 use form::ModelSettings;
@@ -72,6 +72,10 @@ enum Msg {
     },
     /// 本地规则扫描跑完了
     ScanDone(u64, crate::scan::LocalReport),
+    /// 第二段的进度：第几批、判什么
+    ScanProgress(u64, String),
+    /// 第二段跑完了
+    ScanAiDone(u64, Vec<crate::scan_ai::Judgement>, Vec<String>),
     Tick,
 }
 
@@ -380,6 +384,19 @@ impl Session<'_> {
                 self.state.push(text);
             }
             Msg::Done(req, result) if req == self.req => self.finish_chat(result),
+            Msg::ScanProgress(req, line) if req == self.req => {
+                self.state.push(Entry::Info(line));
+            }
+            Msg::ScanAiDone(req, judgements, failed) if req == self.req => {
+                self.finish_task();
+                // 两段的结果合成一份，`/fix` 以后只看 state.findings
+                let seq = self.state.findings.len();
+                let list = crate::vuln_checklist::VulnChecklist::new();
+                self.state
+                    .findings
+                    .extend(crate::scan_ai::to_findings(&judgements, &list, seq));
+                self.state.push(Entry::ScanAi { judgements, failed });
+            }
             Msg::ScanDone(req, report) if req == self.req => {
                 self.finish_task();
                 self.state.findings = report.findings.clone();
@@ -393,7 +410,9 @@ impl Session<'_> {
             | Msg::Diff { .. }
             | Msg::Proposal { .. }
             | Msg::Applied { .. }
-            | Msg::ScanDone(..) => {
+            | Msg::ScanDone(..)
+            | Msg::ScanProgress(..)
+            | Msg::ScanAiDone(..) => {
                 return false;
             }
         }
@@ -731,37 +750,104 @@ impl Session<'_> {
 
     /// `/sessions` 和 `/search` 共用：读一遍目录，把列表和正文开头交给面板，
     /// 之后过滤都在内存里做
-    /// `/scan [路径]`：本地规则扫一遍，只读，不碰任何文件。
-    /// 放在后台线程跑，大仓库也不会卡住界面；Esc 可以取消。
-    fn start_scan(&mut self, path: Option<&str>) -> Result<()> {
+    /// `/scan [路径] [--ai]`
+    ///
+    /// 第一段（本地规则）永远跑，秒级、不花钱；加 `--ai` 才进第二段，
+    /// 把本地规则判不了的条目分批交给模型逐条判断。两段都只读。
+    fn start_scan(&mut self, args: &[&str]) -> Result<()> {
         if self.state.busy.is_some() {
             bail!("正在忙，等这次结束或者按 Esc 取消");
         }
-        let root = match path {
+        let with_ai = args.iter().any(|a| *a == "--ai");
+        let root = match args.iter().find(|a| !a.starts_with('-')) {
             Some(p) => std::path::PathBuf::from(p),
             None => std::env::current_dir()?,
         };
         if !root.is_dir() {
             bail!("不是一个目录：{}", root.display());
         }
+        // 第二段要烧 token，先把客户端建好：配置不对就当场说，别等扫完了才报错
+        let client = if with_ai {
+            Some(LlmClient::new(&self.app.effective()).context("无法创建模型客户端")?)
+        } else {
+            None
+        };
+
         let req = self.next_req();
         let tx = self.tx.clone();
         self.state.push(Entry::Info(format!(
             "正在扫描 {}（本地规则，只读）…",
             ui::tilde(&root)
         )));
-        self.state.busy = Some("扫描中…".into());
+        self.state.busy = Some(if with_ai {
+            "扫描中（含模型判定）…".into()
+        } else {
+            "扫描中…".into()
+        });
+
         self.task = Some(tokio::spawn(async move {
+            let scan_root = root.clone();
             let report = tokio::task::spawn_blocking(move || {
-                crate::scan::scan_local(&root, &crate::vuln_checklist::VulnChecklist::new())
+                crate::scan::scan_local(&scan_root, &crate::vuln_checklist::VulnChecklist::new())
             })
             .await
             .unwrap_or_else(|_| crate::scan::LocalReport::empty());
             let _ = tx.send(Msg::ScanDone(req, report));
+
+            let Some(client) = client else { return };
+            let digest_root = root.clone();
+            let Ok(digest) = tokio::task::spawn_blocking(move || {
+                crate::scan_ai::digest(&digest_root)
+            })
+            .await
+            else {
+                let _ = tx.send(Msg::ScanProgress(req, "生成仓库摘要失败，跳过模型判定".into()));
+                return;
+            };
+
+            let checklist = crate::vuln_checklist::VulnChecklist::new();
+            let batches = crate::scan_ai::batches(&checklist, &crate::scan::covered_ids());
+            let total = batches.len();
+            let mut judgements = Vec::new();
+            let mut failed = Vec::new();
+            let mut tokens = 0u64;
+
+            for (i, batch) in batches.iter().enumerate() {
+                let _ = tx.send(Msg::ScanProgress(
+                    req,
+                    format!("模型判定 {}/{total}：{}（{} 条）", i + 1, batch.label, batch.items.len()),
+                ));
+                let prompt = crate::scan_ai::prompt(batch, &digest);
+                let messages = [Message::user(prompt)];
+                let opts = ChatOptions {
+                    json: true,
+                    max_tokens: Some(4000),
+                    tools: Vec::new(),
+                };
+                match client.chat(&messages, &opts).await {
+                    Ok(resp) => {
+                        tokens += resp.usage.as_ref().map(|u| u.total_tokens).unwrap_or(0);
+                        match crate::scan_ai::parse(&resp.content) {
+                            Ok(v) if !v.is_empty() => judgements.extend(v),
+                            Ok(_) => failed.push(format!("{}（返回里没有判定）", batch.label)),
+                            Err(e) => failed.push(format!("{}（{e:#}）", batch.label)),
+                        }
+                    }
+                    Err(e) => failed.push(format!("{}（{e:#}）", batch.label)),
+                }
+            }
+
+            let _ = tx.send(Msg::ScanProgress(
+                req,
+                format!("模型判定结束，共消耗 {tokens} tokens"),
+            ));
+            let _ = tx.send(Msg::ScanAiDone(req, judgements, failed));
         }));
         Ok(())
     }
 
+    /// `/sessions` 和 `/search` 共用：读一遍目录，把列表和正文开头交给面板，
+    /// 之后过滤都在内存里做
     fn open_sessions_panel(&mut self, query: &str) -> Result<()> {
         let (entries, skipped) = self.store.catalog()?;
         if skipped > 0 {
@@ -814,7 +900,7 @@ impl Session<'_> {
             "demo" => start_demo(&mut self.state),
             "clear" | "new" => self.new_conversation(),
             "resume" => self.resume_latest()?,
-            "scan" => self.start_scan(args.first().copied())?,
+            "scan" => self.start_scan(&args)?,
             "sessions" | "history" => self.open_sessions_panel("")?,
             // 关键词直接带进面板的搜索框，进去还能继续改
             "search" => self.open_sessions_panel(&args.join(" "))?,

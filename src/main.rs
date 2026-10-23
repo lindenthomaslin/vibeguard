@@ -13,6 +13,7 @@ mod prompt;
 mod repl;
 mod review;
 mod scan;
+mod scan_ai;
 mod scan_ui;
 mod sessions;
 mod theme;

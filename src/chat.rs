@@ -22,6 +22,11 @@ pub enum Entry {
     Summary(Vec<Finding>),
     /// 一次本地扫描的完整结果：汇总 + 逐条列表
     Scan(Box<crate::scan::LocalReport>),
+    /// 第二段：模型对剩余清单条目的判定
+    ScanAi {
+        judgements: Vec<crate::scan_ai::Judgement>,
+        failed: Vec<String>,
+    },
     /// 一条待确认的发现及其修复 diff，渲染时按当前宽度排版
     Card {
         finding: Box<Finding>,
@@ -136,6 +141,9 @@ impl Entry {
             Entry::Block(lines) => lines.clone(),
             Entry::Summary(findings) => scan_ui::summary_lines(findings, look),
             Entry::Scan(report) => scan_ui::report_lines(report, look),
+            Entry::ScanAi { judgements, failed } => {
+                scan_ui::ai_lines(judgements, failed, look)
+            }
             Entry::Card {
                 finding,
                 fix,

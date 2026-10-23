@@ -97,10 +97,13 @@ Early, but no longer a demo. Working today:
 - **`/scan [path]`** — 20 local rules drawn from the 410-item checklist: hardcoded secrets,
   `shell=True`, `eval`, SQL concatenation, ECB mode, `innerHTML`, `CORS *`, Dockerfile running as
   root, and so on. Every hit carries `file:line` and a CWE id. Read-only, no tokens spent.
+- **`/scan --ai`** — then hands the remaining 390 items to the model, 60 at a time, and demands a
+  verdict plus evidence for each one: `exists / suspected / not_found / undetermined`. Items that
+  can only be confirmed by running the service (rate limits, brute force, IDOR) are labelled
+  `undetermined` rather than quietly passed.
 
-The remaining ~390 checklist items need the model to read the code and judge — that pass is the
-next milestone. Until it lands, `/scan` tells you exactly what it covered, so you can tell the
-difference between "clean" and "not looked at".
+Every scan reports exactly how much of the checklist it covered, so "clean" and "not looked at"
+never look the same.
 
 ## Docs
 

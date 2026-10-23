@@ -181,6 +181,76 @@ pub fn report_lines(report: &crate::scan::LocalReport, look: &Look) -> Vec<Line<
     out
 }
 
+/// 第二段的判定结果：按判定类型汇总，只列出「存在 / 疑似」的明细
+pub fn ai_lines(
+    judgements: &[crate::scan_ai::Judgement],
+    failed: &[String],
+    look: &Look,
+) -> Vec<Line<'static>> {
+    use crate::scan_ai::Verdict;
+    /// 明细最多列这么多条
+    const MAX_LISTED: usize = 40;
+
+    let count = |v: Verdict| judgements.iter().filter(|j| j.verdict == v).count();
+    let (exists, suspected, not_found, undetermined) = (
+        count(Verdict::Exists),
+        count(Verdict::Suspected),
+        count(Verdict::NotFound),
+        count(Verdict::Undetermined),
+    );
+
+    let mut out = vec![Line::from(vec![
+        Span::styled(format!("{} ", look.glyphs.thinking), look.accent()),
+        Span::raw("模型判定了 "),
+        Span::styled(judgements.len().to_string(), BOLD),
+        Span::raw(" 条清单："),
+        Span::styled(format!("存在 {exists}"), look.error()),
+        Span::raw(" · "),
+        Span::styled(format!("疑似 {suspected}"), look.warn()),
+        Span::styled(
+            format!(" · 不存在 {not_found} · 无法判断 {undetermined}"),
+            look.muted(),
+        ),
+    ])];
+
+    let mut listed = 0;
+    for j in judgements
+        .iter()
+        .filter(|j| matches!(j.verdict, Verdict::Exists | Verdict::Suspected))
+    {
+        if listed == 0 {
+            out.push(Line::raw(""));
+        }
+        if listed >= MAX_LISTED {
+            break;
+        }
+        listed += 1;
+        let style = if j.verdict == Verdict::Exists {
+            look.error()
+        } else {
+            look.warn()
+        };
+        out.push(Line::from(vec![
+            Span::styled(format!("  {} ", j.verdict.label()), style),
+            Span::styled(j.id.clone(), BOLD),
+            Span::raw("  "),
+            Span::styled(j.evidence.clone(), Style::new().add_modifier(Modifier::UNDERLINED)),
+            Span::raw("  "),
+            Span::styled(j.reason.clone(), look.muted()),
+        ]));
+    }
+    if undetermined > 0 {
+        out.push(Line::styled(
+            format!("  {undetermined} 条静态看不出来——它们要跑起来发请求才能验，别当成「没问题」"),
+            look.muted(),
+        ));
+    }
+    for f in failed {
+        out.push(Line::styled(format!("  有一批没跑成功：{f}"), look.error()));
+    }
+    out
+}
+
 /// 新增 / 删除的行数
 pub fn diff_stats(old: &str, new: &str) -> (usize, usize) {
     TextDiff::from_lines(old, new)

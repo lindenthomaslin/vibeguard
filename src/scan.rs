@@ -249,6 +249,11 @@ fn compiled() -> &'static [Compiled] {
     })
 }
 
+/// 本地规则覆盖的清单编号。第二段据此跳过——已经判过的不必再花 token 问一遍。
+pub fn covered_ids() -> Vec<&'static str> {
+    RULES.iter().map(|r| r.id).collect()
+}
+
 /// 一次本地扫描的结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalReport {
