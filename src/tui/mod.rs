@@ -1122,6 +1122,7 @@ impl Session<'_> {
             files_scanned: self.state.files_scanned,
             failed: self.state.failed_batches.clone(),
             unverified: self.state.unverified.clone(),
+            skipped_items: self.state.skipped_items,
         };
         let md = crate::report::markdown(&self.state.findings, &self.state.judgements, &meta);
         let js = crate::report::json(&self.state.findings, &self.state.judgements, &meta);
@@ -1361,6 +1362,8 @@ impl Session<'_> {
             bail!("正在忙，等这次结束或者按 Esc 取消");
         }
         let with_ai = args.contains(&"--ai");
+        // 默认只判安全类分类；--all 才把工程规范类也交给模型
+        let scan_all = args.contains(&"--all");
         let root = match args.iter().find(|a| !a.starts_with('-')) {
             Some(p) => std::path::PathBuf::from(p),
             None => std::env::current_dir()?,
@@ -1388,6 +1391,28 @@ impl Session<'_> {
             "正在扫描 {}（本地规则，只读）…",
             ui::tilde(&root)
         )));
+        if with_ai && !scan_all {
+            // 说清楚这一轮判什么、不判什么。少了这句，「覆盖 294/410」会让人
+            // 以为是漏了，其实是故意没让模型去猜工程规范
+            let list = crate::vuln_checklist::VulnChecklist::new();
+            let covered = crate::scan::covered_ids();
+            let skipped: usize = list
+                .categories()
+                .iter()
+                .filter(|c| !crate::scan_ai::is_security_category(c))
+                .map(|c| {
+                    list.by_category(c)
+                        .iter()
+                        .filter(|i| !covered.contains(&i.id.as_str()))
+                        .count()
+                })
+                .sum();
+            self.state.skipped_items = skipped;
+            self.state.push(Entry::Info(format!(
+                "AI 判定只跑安全类分类（A–M、P、R），跳过 N/O/Q/S 的 {skipped} 条工程规范条目；\
+                 要全跑加 --all"
+            )));
+        }
         self.state.busy = Some(if with_ai {
             "扫描中（含模型判定）…".into()
         } else {
@@ -1504,8 +1529,16 @@ impl Session<'_> {
             } else {
                 crate::scan_ai::BATCH
             };
-            let batches =
-                crate::scan_ai::batches_with(&checklist, &crate::scan::covered_ids(), size);
+            let batches = crate::scan_ai::batches_with(
+                &checklist,
+                &crate::scan::covered_ids(),
+                size,
+                if scan_all {
+                    &[]
+                } else {
+                    crate::scan_ai::SECURITY_CATEGORIES
+                },
+            );
             let total = batches.len();
 
             // 并发跑：串行 7 批 × 十几秒就是两分钟的干等。3 路是折中——

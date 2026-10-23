@@ -29,6 +29,8 @@ pub struct Meta {
     pub failed: Vec<String>,
     /// 证据核实不了、已剔除的条目：报告里必须写，否则数字对不上
     pub unverified: Vec<String>,
+    /// 故意没交给模型的工程规范条目数（N/O/Q/S）
+    pub skipped_items: usize,
 }
 
 impl Meta {
@@ -55,6 +57,12 @@ pub fn markdown(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> 
         meta.local_rules,
         judgements.len()
     ));
+    if meta.skipped_items > 0 {
+        out.push_str(&format!(
+            "| AI 判定范围 | 安全类 A–M、P、R（N/O/Q/S 的 {} 条工程规范未交给模型，`--all` 可全跑） |\n",
+            meta.skipped_items
+        ));
+    }
 
     if !meta.failed.is_empty() {
         out.push_str(&format!(
@@ -180,6 +188,8 @@ struct Coverage {
     failed_batches: Vec<String>,
     /// 证据核实不了、已剔除的条目
     unverified: Vec<String>,
+    /// 故意没交给模型的工程规范条目数
+    skipped_items: usize,
 }
 
 #[derive(Serialize)]
@@ -211,6 +221,7 @@ pub fn json(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> Stri
             covered: meta.covered(judgements),
             failed_batches: meta.failed.clone(),
             unverified: meta.unverified.clone(),
+            skipped_items: meta.skipped_items,
         },
         summary: counts(findings)
             .into_iter()
@@ -254,6 +265,7 @@ mod tests {
             files_scanned: 6,
             failed: Vec::new(),
             unverified: Vec::new(),
+            skipped_items: 0,
         }
     }
 

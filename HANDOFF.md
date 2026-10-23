@@ -92,7 +92,7 @@ Be precise about this: the conversational core is real, the scanner is a skeleto
 | Themes (dark / light) and glyph styles (default / anime) | ✓ works |
 | `vibeguard config show / init / set`, `vibeguard ping` | ✓ works |
 | `/scan [path]` — 20 local rules over the 410-item checklist | ✓ works, read-only, `file:line` + CWE |
-| `/scan --ai` — model judges the remaining 390 items, 60 per batch | ✓ works, costs tokens |
+| `/scan --ai` — model judges the remaining ~323 security items, 60 per batch. N/O/Q/S (deps, cloud, logging, code quality) are skipped unless `--all` | ✓ works, costs tokens |
 | `/fix` — model writes the fix, you approve the diff, then it is written | ✓ works, never writes without approval |
 | `/report` — `vibeguard-report.md` + `.json`, both stating coverage | ✓ works |
 | `/findings` — reload the last scan for a directory, with per-file staleness | ✓ works |

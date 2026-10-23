@@ -96,7 +96,7 @@ Early, but it does real work. Two stages, one report:
 | Command | What it costs | What you get |
 |---|---|---|
 | `/scan [path]` | seconds, no tokens | 20 local rules over the 410-item checklist — `file:line` + CWE for every hit |
-| `/scan --ai` | a handful of requests | the model judges the remaining 390 items, each with a verdict and evidence |
+| `/scan --ai` | a handful of requests | the model judges the remaining security items, each with a verdict and evidence. Engineering-hygiene categories (dependencies, cloud, logging, code quality) are skipped by default — `--all` includes them |
 | `/fix [n]` | one request per fix | a diff, and nothing is written until you press `y` |
 | `/report` | free | `vibeguard-report.md` + `.json`, both stating coverage |
 

@@ -184,6 +184,8 @@ pub struct AppState {
     pub failed_batches: Vec<String>,
     /// 模型给了判定、但证据核实不了的条目（文件不存在 / 行号超范围）
     pub unverified: Vec<String>,
+    /// 这一轮故意没交给模型的工程规范条目数（N/O/Q/S）
+    pub skipped_items: usize,
     /// 扫描时每个文件的指纹：用来判断「这条发现还准不准」
     pub fingerprints: std::collections::BTreeMap<String, crate::scan_store::Fingerprint>,
     /// 这次判定所依据的仓库快照，增量扫描靠它判断哪些文件变过
@@ -214,6 +216,7 @@ impl AppState {
             files_scanned: 0,
             failed_batches: Vec::new(),
             unverified: Vec::new(),
+            skipped_items: 0,
             fingerprints: std::collections::BTreeMap::new(),
             digest: None,
             dry_run: None,

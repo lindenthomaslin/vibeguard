@@ -74,7 +74,7 @@ VibeGuard 就是对这道缝的回应：速度不变，把缺的那一问塞回�
 | 主题（dark / light）与字形风格（default / anime） | ✓ 可用 |
 | `vibeguard config show / init / set`、`vibeguard ping` | ✓ 可用 |
 | `/scan [路径]`：410 条清单里的 20 条本地规则 | ✓ 可用，只读，给出 `文件:行号` + CWE |
-| `/scan --ai`：模型逐条判定剩下 390 条，60 条一批 | ✓ 可用，烧 token |
+| `/scan --ai`：模型逐条判定剩下的约 323 条安全类条目，60 条一批。N/O/Q/S（依赖、云、日志、代码质量）默认跳过，`--all` 才跑 | ✓ 可用，烧 token |
 | `/fix`：模型写修复、你看 diff、确认后才落盘 | ✓ 可用，不确认就不写 |
 | `/report`：`vibeguard-report.md` + `.json`，两份都写明覆盖面 | ✓ 可用 |
 | `/findings`：载入某目录上次的扫描结果，带逐文件的过期判断 | ✓ 可用 |

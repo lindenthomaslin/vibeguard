@@ -15,6 +15,25 @@ use serde::Deserialize;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 
+/// AI 判定默认只跑这些分类：A~M、P、R 都是「能被利用」的东西。
+///
+/// 跳过的是 N（依赖与供应链）、O（云与基础设施）、Q（日志与监控）、S（代码质量）——
+/// 这四类大多是工程规范（没有日志、没有迁移脚本、没有探针），让模型读代码判断
+/// 只会得到一堆「存在」，把真正的漏洞淹掉。它们更适合交给专门的工具。
+pub const SECURITY_CATEGORIES: &[char] = &[
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'P', 'R',
+];
+
+/// 分类字符串是「A. 认证与账号」，取首字母
+pub fn category_letter(category: &str) -> char {
+    category.chars().next().unwrap_or('?')
+}
+
+/// 这个分类会不会进 AI 判定
+pub fn is_security_category(category: &str) -> bool {
+    SECURITY_CATEGORIES.contains(&category_letter(category))
+}
+
 /// 一次喂给模型多少条。太多会漏条目、输出被截断；太少则请求次数爆炸。
 /// 60 条大约 8 次请求，是个折中：再小就变成 20 次，一次真模型调用十几秒，太慢。
 pub const BATCH: usize = 60;
@@ -110,7 +129,12 @@ impl Batch {
 /// 按分类顺序把条目装进若干批，每批不超过 `BATCH` 条。
 /// 跨分类装批是为了少发请求——真模型一次要十几秒，按 19 个分类发就是五分钟。
 /// 指定批大小的版本：增量扫描时摘要小，可以一次判更多条
-pub fn batches_with(checklist: &VulnChecklist, skip: &[&str], size: usize) -> Vec<Batch> {
+pub fn batches_with(
+    checklist: &VulnChecklist,
+    skip: &[&str],
+    size: usize,
+    only: &[char],
+) -> Vec<Batch> {
     let size = size.max(1);
     let mut out: Vec<Batch> = Vec::new();
     let mut current: Vec<VulnItem> = Vec::new();
@@ -133,6 +157,9 @@ pub fn batches_with(checklist: &VulnChecklist, skip: &[&str], size: usize) -> Ve
     };
 
     for cat in checklist.categories() {
+        if !only.is_empty() && !only.contains(&category_letter(cat)) {
+            continue;
+        }
         for item in checklist
             .by_category(cat)
             .into_iter()
@@ -774,7 +801,12 @@ pub fn prompt(batch: &Batch, index: &Index) -> String {
          硬性要求：\n\
          1. 每一条都必须给 evidence：`文件:行号`；确实判断不了的，写清楚缺什么信息。\n\
          2. 不要跳过任何条目，不要编造条目。\n\
-         3. 只输出 json，不要解释，也不要包代码块围栏。\n\n\
+         3. **同一个问题只报一条**：多条清单项指的是同一处代码或同一个事实时，\
+         选最贴切的那条报 exists/suspected，其余写 not_found，reason 写「与 XX 同源」。\
+         不要为了凑数把一处问题贴到七八个条目上。\n\
+         4. **仓库里没有的东西直接写 not_found**：没有 Agent、没有 K8s、没有前端，\
+         就如实说没有，不要拿别处的问题去顶。\n\
+         5. 只输出 json，不要解释，也不要包代码块围栏。\n\n\
          输出格式：\n\
          {\"results\":[{\"id\":\"AUTH-01\",\"verdict\":\"exists\",\"evidence\":\"app.py:12\",\"reason\":\"一句话依据\"}]}\n\n",
     );
@@ -1079,7 +1111,7 @@ mod tests {
     #[test]
     fn batches_cover_every_item_exactly_once() {
         let list = VulnChecklist::new();
-        let bs = batches_with(&list, &[], BATCH);
+        let bs = batches_with(&list, &[], BATCH, &[]);
         let total: usize = bs.iter().map(|b| b.items.len()).sum();
         assert_eq!(total, list.len(), "有条目被漏掉或重复");
         assert!(bs.iter().all(|b| b.items.len() <= BATCH));
@@ -1087,10 +1119,47 @@ mod tests {
     }
 
     #[test]
+    fn the_default_scope_leaves_out_the_engineering_categories() {
+        let list = VulnChecklist::new();
+        let skip = crate::scan::covered_ids();
+
+        let security = batches_with(&list, &skip, BATCH, SECURITY_CATEGORIES);
+        let ids: Vec<&str> = security
+            .iter()
+            .flat_map(|b| b.items.iter().map(|i| i.id.as_str()))
+            .collect();
+        for id in &ids {
+            let item = list.get(id).unwrap();
+            assert!(
+                is_security_category(&item.category),
+                "{id}（{}）不该进安全类判定",
+                item.category
+            );
+        }
+
+        // --all 时四类工程规范都要回来
+        let everything = batches_with(&list, &skip, BATCH, &[]);
+        let total_all: usize = everything.iter().map(|b| b.items.len()).sum();
+        let total_sec: usize = security.iter().map(|b| b.items.len()).sum();
+        assert!(total_sec < total_all, "安全类应当少一些");
+        assert_eq!(total_all, list.len() - skip.len());
+    }
+
+    #[test]
+    fn the_category_letters_match_the_checklist() {
+        assert!(is_security_category("A. 认证与账号"));
+        assert!(is_security_category("R. Agent 与 LLM 特有"));
+        assert!(!is_security_category("S. 代码质量与正确性"));
+        assert!(!is_security_category("Q. 日志、监控与应急"));
+        assert!(!is_security_category("N. 依赖与供应链"));
+        assert!(!is_security_category("O. 云与基础设施"));
+    }
+
+    #[test]
     fn batches_skip_what_the_local_rules_already_decided() {
         let list = VulnChecklist::new();
         let skip = crate::scan::covered_ids();
-        let bs = batches_with(&list, &skip, BATCH);
+        let bs = batches_with(&list, &skip, BATCH, &[]);
         let total: usize = bs.iter().map(|b| b.items.len()).sum();
         assert_eq!(
             total,
@@ -1108,10 +1177,10 @@ mod tests {
     fn bigger_batches_need_fewer_requests() {
         let list = VulnChecklist::new();
         let skip = crate::scan::covered_ids();
-        let normal = batches_with(&list, &skip, BATCH).len();
-        let big = batches_with(&list, &skip, BATCH_INCREMENTAL).len();
+        let normal = batches_with(&list, &skip, BATCH, &[]).len();
+        let big = batches_with(&list, &skip, BATCH_INCREMENTAL, &[]).len();
         assert!(big < normal, "{big} 应该比 {normal} 少");
-        let total: usize = batches_with(&list, &skip, BATCH_INCREMENTAL)
+        let total: usize = batches_with(&list, &skip, BATCH_INCREMENTAL, &[])
             .iter()
             .map(|b| b.items.len())
             .sum();
@@ -1233,7 +1302,7 @@ mod tests {
         fs::write(dir.path().join("a.py"), "print(1)\n").unwrap();
         let idx = Index::build(dir.path());
         let list = VulnChecklist::new();
-        let b = &batches_with(&list, &[], BATCH)[0];
+        let b = &batches_with(&list, &[], BATCH, &[])[0];
         let p = prompt(b, &idx);
         for item in &b.items {
             assert!(p.contains(&item.id), "提示词里少了 {}", item.id);
