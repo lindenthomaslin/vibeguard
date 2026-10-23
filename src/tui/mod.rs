@@ -129,6 +129,10 @@ struct Session<'a> {
     cwd: String,
     /// `/scan` 扫的目录；`/fix` 写文件时以它为基准，不能用错目录
     scan_root: std::path::PathBuf,
+    /// 这次扫描的存档编号（同一轮的两段共用，第二段覆盖第一段）
+    scan_id: Option<String>,
+    /// 这次扫描开始的时间（Unix 秒），存档里用它当 created
+    scan_started: i64,
     /// 终端原生图片（不支持时是空的，启动画面退回字标）
     gfx: Graphics,
     /// 启动画面只在还没开口时显示
@@ -193,6 +197,8 @@ async fn event_loop(app: &mut App, terminal: &mut DefaultTerminal, gfx: Graphics
         last_usage: String::new(),
         cwd,
         scan_root: std::env::current_dir().unwrap_or_else(|_| ".".into()),
+        scan_id: None,
+        scan_started: 0,
         gfx,
         show_banner: true,
         repaint: false,
@@ -435,12 +441,14 @@ impl Session<'_> {
                 self.state.judgements = judgements.clone();
                 self.state.failed_batches = failed.clone();
                 self.state.push(Entry::ScanAi { judgements, failed });
+                self.save_scan();
             }
             Msg::ScanDone(req, report) if req == self.req => {
                 self.finish_task();
                 self.state.files_scanned = report.files_scanned;
                 self.state.findings = report.findings.clone();
                 self.state.push(Entry::Scan(Box::new(report)));
+                self.save_scan();
             }
             // 已取消请求的迟到消息
             Msg::Reasoning(..)
@@ -795,6 +803,115 @@ impl Session<'_> {
 
     /// `/sessions` 和 `/search` 共用：读一遍目录，把列表和正文开头交给面板，
     /// 之后过滤都在内存里做
+    /// 把当前结果存档。两段跑完各存一次：先存本地规则的结果，
+    /// 模型判完再覆盖同一份，这样中途退出也留得下东西。
+    fn save_scan(&mut self) {
+        let Some(id) = self.scan_id.clone() else {
+            return;
+        };
+        // 指纹按「现在磁盘上的样子」算：这就是这次扫描看到的版本
+        let mut fingerprints = std::collections::BTreeMap::new();
+        for f in &self.state.findings {
+            if let Some(fp) = crate::scan_store::Fingerprint::of(&self.scan_root.join(&f.file)) {
+                fingerprints.insert(f.file.clone(), fp);
+            }
+        }
+        self.state.fingerprints = fingerprints.clone();
+
+        let scan = crate::scan_store::StoredScan {
+            id: id.clone(),
+            root: self.scan_root.to_string_lossy().to_string(),
+            created: self.scan_started,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            files_scanned: self.state.files_scanned,
+            findings: self.state.findings.clone(),
+            judgements: self.state.judgements.clone(),
+            failed_batches: self.state.failed_batches.clone(),
+            fingerprints,
+        };
+        let store = crate::scan_store::ScanStore::beside_config(&self.app.config_path);
+        match store.save(&scan) {
+            Ok(path) => self
+                .state
+                .push(Entry::Info(format!("结果已存档：{}", ui::tilde(&path)))),
+            // 存档失败不影响这次扫描，只是下次 /findings 找不回来
+            Err(e) => self.state.push(Entry::Warn(format!(
+                "存档失败（结果只在这次会话里）：{e:#}"
+            ))),
+        }
+    }
+
+    /// `/findings`：载入这个目录上次的扫描结果，不重新扫、不花钱
+    fn load_findings(&mut self) -> Result<()> {
+        let store = crate::scan_store::ScanStore::beside_config(&self.app.config_path);
+        let Some(scan) = store.latest_for(&self.scan_root)? else {
+            let others = store.list().map(|v| v.len()).unwrap_or(0);
+            if others > 0 {
+                bail!(
+                    "这个目录还没有扫描记录：{}（存档里有 {others} 条其他目录的记录）",
+                    ui::tilde(self.scan_root.as_path())
+                );
+            }
+            bail!(
+                "还没有任何扫描记录：{}",
+                ui::tilde(self.scan_root.as_path())
+            );
+        };
+
+        let ago = format_ago(scan.created, now_secs());
+        self.state.findings = scan.findings.clone();
+        self.state.judgements = scan.judgements.clone();
+        self.state.failed_batches = scan.failed_batches.clone();
+        self.state.files_scanned = scan.files_scanned;
+        self.state.fingerprints = scan.fingerprints.clone();
+        self.scan_id = Some(scan.id.clone());
+        self.scan_started = scan.created;
+
+        self.state.push(Entry::Info(format!(
+            "载入 {ago}的扫描结果（{}）· 共 {} 个问题",
+            ui::tilde(self.scan_root.as_path()),
+            scan.findings.len()
+        )));
+
+        // 把结果按「一次扫描」的样子重新画一遍
+        let files_with_hits = scan
+            .findings
+            .iter()
+            .map(|f| f.file.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        self.state
+            .push(Entry::Scan(Box::new(crate::scan::LocalReport {
+                findings: scan.findings.clone(),
+                files_scanned: scan.files_scanned,
+                files_skipped: 0,
+                files_with_hits,
+                truncated: false,
+                rules: crate::scan::covered_ids().len(),
+                checklist_total: crate::vuln_checklist::VulnChecklist::new().len(),
+            })));
+
+        let stale = scan.stale_files(&self.scan_root);
+        if stale.is_empty() {
+            self.state
+                .push(Entry::Info("文件都没变，可以直接 /fix".into()));
+        } else {
+            let shown: Vec<&str> = stale.iter().take(5).map(String::as_str).collect();
+            let more = stale.len().saturating_sub(shown.len());
+            self.state.push(Entry::Warn(format!(
+                "有 {} 个文件在扫描后改过（{}{}）：相关发现可能过期，/fix 会跳过它们",
+                stale.len(),
+                shown.join("、"),
+                if more > 0 {
+                    format!(" 等 {more} 个")
+                } else {
+                    String::new()
+                }
+            )));
+        }
+        Ok(())
+    }
+
     /// `/report [路径]`
     ///
     /// 把最近一次扫描落成两份文件：`.md` 给人看，`.json` 给 CI 看。
@@ -884,8 +1001,9 @@ impl Session<'_> {
             .clamp(1, 20);
         let wanted = args.iter().find(|a| a.starts_with("VG-")).copied();
 
-        // 只挑文件真的存在、读得出来的发现
+        // 只挑文件真的存在、而且扫描之后没被改过的发现
         let mut picked: Vec<Finding> = Vec::new();
+        let mut stale = 0usize;
         for f in &self.state.findings {
             if picked.len() >= limit {
                 break;
@@ -899,10 +1017,24 @@ impl Session<'_> {
             if !path.is_file() {
                 continue;
             }
+            // 文件在扫描后改过：行号可能已经不对了，宁可不修
+            let fresh = crate::scan_store::is_fresh(&self.scan_root, &self.state.fingerprints, f);
+            if !fresh {
+                stale += 1;
+                continue;
+            }
             picked.push(f.clone());
         }
         if picked.is_empty() {
+            if stale > 0 {
+                bail!("{stale} 条发现所在的文件在扫描后改过，行号可能已经不对了：先重扫再修");
+            }
             bail!("没有可以修的发现（文件不存在，或者编号对不上）");
+        }
+        if stale > 0 {
+            self.state.push(Entry::Warn(format!(
+                "跳过 {stale} 条：文件在扫描后改过，先重扫这些文件再修"
+            )));
         }
 
         let client = LlmClient::new(&self.app.effective()).context("无法创建模型客户端")?;
@@ -1012,17 +1144,30 @@ impl Session<'_> {
                 Err(e) => problems.push(format!("{} 写入失败：{e}", fix.file)),
             }
         }
-        // 写成功的从待修列表里拿掉，免得下次 /fix 又提一遍
-        let done: Vec<&str> = fixes.iter().map(|f| f.finding_id.as_str()).collect();
+        // 写过的文件里，剩下的发现也一并作废：我们自己的改动同样会让行号漂移，
+        // 留着它们只会让下一次 /fix 改错地方
+        let touched: Vec<&str> = fixes.iter().map(|f| f.file.as_str()).collect();
+        let before = self.state.findings.len();
         self.state
             .findings
-            .retain(|f| !done.contains(&f.id.as_str()));
+            .retain(|f| !touched.contains(&f.file.as_str()));
+        let dropped = before - self.state.findings.len();
         if written > 0 {
             self.state
                 .push(Entry::Success(format!("共写入 {written} 个文件")));
         }
+        if dropped > written {
+            self.state.push(Entry::Info(format!(
+                "这些文件里另有 {} 条发现已作废（改动会让行号漂移），建议重新扫一次",
+                dropped - written
+            )));
+        }
         for p in problems {
             self.state.push(Entry::Warn(p));
+        }
+        // 存档也跟着更新，免得下次 /findings 又看见已经修过的条目
+        if written > 0 {
+            self.save_scan();
         }
     }
 
@@ -1050,6 +1195,11 @@ impl Session<'_> {
         };
 
         self.scan_root = root.clone();
+        self.scan_started = now_secs();
+        self.scan_id = Some(crate::scan_store::new_id(
+            &root,
+            chrono::Local::now().timestamp_millis(),
+        ));
         let req = self.next_req();
         let tx = self.tx.clone();
         self.state.push(Entry::Info(format!(
@@ -1204,6 +1354,7 @@ impl Session<'_> {
             "scan" => self.start_scan(&args)?,
             "fix" => self.start_fix(&args)?,
             "report" => self.write_report(&args)?,
+            "findings" => self.load_findings()?,
             "sessions" | "history" => self.open_sessions_panel("")?,
             // 关键词直接带进面板的搜索框，进去还能继续改
             "search" => self.open_sessions_panel(&args.join(" "))?,

@@ -15,6 +15,7 @@ mod report;
 mod review;
 mod scan;
 mod scan_ai;
+mod scan_store;
 mod scan_ui;
 mod sessions;
 mod theme;

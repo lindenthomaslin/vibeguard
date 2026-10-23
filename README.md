@@ -107,6 +107,9 @@ Early, but no longer a demo. Working today:
   nothing until you press `y`. In `plan` mode it still shows you the diff, it just never writes.
   Files that changed on disk while you were reviewing are skipped rather than overwritten.
 
+- **`/findings`** — reloads the last scan for this directory from `~/.config/vibeguard/scans/`
+  instead of paying for a fresh one. Every file's content hash was recorded at scan time, so it
+  can tell you which findings have gone stale — and `/fix` refuses to touch those.
 - **`/report`** — writes `vibeguard-report.md` (for humans) and `vibeguard-report.json` (for CI)
   into the scanned directory. Both state the coverage, and both refuse to look complete when a
   batch failed.

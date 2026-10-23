@@ -95,6 +95,7 @@ Be precise about this: the conversational core is real, the scanner is a skeleto
 | `/scan --ai` — model judges the remaining 390 items, 60 per batch | ✓ works, costs tokens |
 | `/fix` — model writes the fix, you approve the diff, then it is written | ✓ works, never writes without approval |
 | `/report` — `vibeguard-report.md` + `.json`, both stating coverage | ✓ works |
+| `/findings` — reload the last scan for a directory, with per-file staleness | ✓ works |
 | `/demo` — scan → report → per-fix review screens | ~ sample data only, touches no files |
 | CI, packaging, licence | ✗ not yet |
 
@@ -322,16 +323,15 @@ Conventions worth keeping:
 
 ## 11. Known gaps and next steps
 
-1. **No CI.** `cargo test` plus `cargo clippy -D warnings` on push would have caught several of the
-   drifts already fixed by hand.
-2. **No licence.** The repo is technically all-rights-reserved.
-3. **`run_command` has no sandbox.** It is opt-in and blocks deletes, but a determined prompt can
+1. **No licence.** The repo is technically all-rights-reserved.
+2. **`run_command` has no sandbox.** It is opt-in and blocks deletes, but a determined prompt can
    still do damage at `full` permission. A path and command allowlist belongs here.
-4. **Scan results have no expiry.** They live in memory until you quit; there is no resume. `/fix`
-   against a stale result re-reads each file before writing, so it fails safe — but it fails late.
-5. **One conversation open at a time.** Opening a session replaces the current one.
-6. **The runtime tier is not covered.** ~158 of the 410 checklist items can only be confirmed by
+3. **One conversation open at a time.** Opening a session replaces the current one.
+4. **The runtime tier is not covered.** ~158 of the 410 checklist items can only be confirmed by
    sending requests at a running service. The tool labels them `undetermined` and stops there.
+5. **No incremental scan.** `/scan --ai` re-judges all 390 items every time. Knowing which files
+   changed since the last run would let it skip most of them — the fingerprints for that are
+   already stored, the batching is not.
 
 ---
 

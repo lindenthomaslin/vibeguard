@@ -182,6 +182,8 @@ pub struct AppState {
     pub files_scanned: usize,
     /// 判定失败的批次。报告里必须写出来，否则「覆盖 230/410」会显得很完整
     pub failed_batches: Vec<String>,
+    /// 扫描时每个文件的指纹：用来判断「这条发现还准不准」
+    pub fingerprints: std::collections::BTreeMap<String, crate::scan_store::Fingerprint>,
     /// 有值表示这一轮只走界面、不写文件，值就是原因（演示 / 计划模式 / 只读权限）
     dry_run: Option<String>,
     /// `/model` 表单；打开时键盘输入都交给它
@@ -207,6 +209,7 @@ impl AppState {
             judgements: Vec::new(),
             files_scanned: 0,
             failed_batches: Vec::new(),
+            fingerprints: std::collections::BTreeMap::new(),
             dry_run: None,
             form: None,
             mode: Mode::default(),

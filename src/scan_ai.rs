@@ -25,7 +25,7 @@ const FILE_BUDGET: usize = 8_000;
 const TREE_LINES: usize = 300;
 
 /// 模型的判定
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Verdict {
     /// 看到了确实有问题的代码
@@ -61,7 +61,7 @@ impl Verdict {
 }
 
 /// 一条判定结果
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Judgement {
     pub id: String,
     pub verdict: Verdict,
