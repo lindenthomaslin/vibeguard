@@ -86,7 +86,8 @@ vibeguard config set permission_mode editable
 vibeguard ping
 ```
 
-界面默认英文，`/lang zh` 切成中文并记住这个选择，`/lang en` 切回去。所有文案集中在一张表
+界面默认英文，打 `/lang` 会弹出两项菜单（↑↓ 选、Enter 确认），也可以直接 `/lang zh` / `/lang en`
+跳过菜单。选择会存进配置，下次启动照样生效。所有文案集中在一张表
 （`src/i18n/strings.rs`）里，加一条消息就在旁边加一句译文——两边对不上时测试会失败。
 
 ## 当前状态

@@ -90,8 +90,8 @@ vibeguard config set permission_mode editable
 vibeguard ping
 ```
 
-The interface is English by default. `/lang zh` switches it to Chinese for the session and saves
-the choice; `/lang en` switches back. Every message lives in one table (`src/i18n/strings.rs`), so
+The interface is English by default. Type `/lang` for a two-item menu (↑↓ then Enter) — or
+`/lang zh` / `/lang en` to skip the menu. The choice is saved and applies from the next start. Every message lives in one table (`src/i18n/strings.rs`), so
 adding a string means adding its translation next to it — a test fails if the two ever drift apart.
 
 ## Status

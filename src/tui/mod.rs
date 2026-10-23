@@ -412,6 +412,7 @@ impl Session<'_> {
                     let theme = Theme::parse(&self.app.effective().theme).unwrap_or_default();
                     self.set_theme(theme.next());
                 }
+                Action::SetLang(lang) => self.apply_lang(lang),
             },
             Msg::Term(Event::Paste(text)) => self.state.on_paste(&text),
             // 窗口尺寸变了，启动画面可能换档或者被收起，顺带整屏重绘一次
@@ -2252,34 +2253,10 @@ impl Session<'_> {
         out
     }
 
-    /// 换配色。只改本次会话，要长期生效用 /config set theme
-    /// `/lang [en|zh]`：不带参数时列出两种语言
+    /// `/lang`：不带参数打开选择菜单，带参数直接切
     fn set_lang(&mut self, args: &[&str]) -> Result<()> {
         let Some(raw) = args.first() else {
-            let dim = Style::new().add_modifier(Modifier::DIM);
-            let current = crate::i18n::current();
-            let mut out = vec![Line::from(vec![
-                Span::styled(
-                    crate::i18n::t("界面语言 ", "Language "),
-                    Style::new().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(current.label()),
-            ])];
-            for lang in [crate::i18n::Lang::En, crate::i18n::Lang::Zh] {
-                let mark = if lang == current { "›" } else { " " };
-                out.push(Line::from(vec![
-                    Span::styled(format!("  {mark} "), dim),
-                    Span::raw(lang.label()),
-                ]));
-            }
-            out.push(Line::styled(
-                crate::i18n::t(
-                    "  /lang en 或 /lang zh 切换（默认英文）",
-                    "  /lang en or /lang zh to switch (English is the default)",
-                ),
-                dim,
-            ));
-            self.state.push(Entry::Block(out));
+            self.state.open_lang_picker();
             return Ok(());
         };
 
@@ -2292,12 +2269,30 @@ impl Session<'_> {
                 )
             );
         };
-        self.app.file.set("lang", lang.code())?;
-        self.app.save()?;
-        crate::i18n::set(lang);
-        self.state
-            .push(Entry::Success(format!("Language: {}", lang.label())));
+        self.apply_lang(lang);
         Ok(())
+    }
+
+    /// 语言选择里按了 Enter：存盘、立即生效、关掉浮层
+    fn apply_lang(&mut self, lang: crate::i18n::Lang) {
+        let saved = self
+            .app
+            .file
+            .set("lang", lang.code())
+            .and_then(|()| self.app.save());
+        if let Err(e) = saved {
+            self.state.push(Entry::Error(pick(
+                format!("保存失败，配置文件没有改动：{e:#}"),
+                format!("Save failed, the config file is unchanged: {e:#}"),
+            )));
+            return;
+        }
+        crate::i18n::set(lang);
+        self.state.close_picker();
+        self.state.push(Entry::Success(pick(
+            format!("界面语言：{}", lang.label()),
+            format!("Language: {}", lang.label()),
+        )));
     }
 
     fn set_theme(&mut self, theme: Theme) {

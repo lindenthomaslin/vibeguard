@@ -6,7 +6,7 @@ use super::view::Choice;
 use crate::chat::{Entry, Scroll, Transcript};
 use crate::editor::{Candidate, Editor};
 use crate::finding::{Finding, Fix};
-use crate::i18n::{pick, tr};
+use crate::i18n::{Lang, pick, tr};
 use crate::input::{Outcome, handle_key};
 use crate::mode::Mode;
 use crate::review;
@@ -24,7 +24,7 @@ impl Candidate {
         match self.name {
             "/model" => "Configure endpoint, API key, model and thinking effort",
             "/mode" => "Switch work mode: plan / confirm / auto",
-            "/lang" => "Interface language: English (default) / Chinese",
+            "/lang" => "Switch interface language: English / Chinese",
             "/scan" => "Scan a directory with local rules; --ai adds model judgement",
             "/fix" => "Generate fixes for scan findings, apply after you approve",
             "/report" => "Export the last scan as .md + .json",
@@ -56,7 +56,7 @@ pub const COMMANDS: &[Candidate] = &[
     },
     Candidate {
         name: "/lang",
-        desc: "界面语言：英文（默认）/ 中文",
+        desc: "切换界面语言：英文 / 中文",
     },
     Candidate {
         name: "/scan",
@@ -141,6 +141,13 @@ fn confirm_hint() -> &'static str {
     )
 }
 
+fn picker_hint() -> &'static str {
+    crate::i18n::t(
+        "↑↓ 选择 · Enter 确认 · Esc 取消",
+        "↑↓ select · Enter confirm · Esc cancel",
+    )
+}
+
 /// 按键处理后，主循环需要执行的动作
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -165,6 +172,8 @@ pub enum Action {
     CycleTheme,
     /// 逐条确认结束，这些修复被接受了，去写文件
     ApplyFixes(Vec<Fix>),
+    /// 语言选择里按了 Enter：切到这个语言
+    SetLang(Lang),
 }
 
 /// 逐条确认模式下的答复
@@ -216,6 +225,22 @@ struct Confirm {
     selected: usize,
 }
 
+/// 语言选择。两个选项，↑↓ 选、Enter 生效——
+/// 光靠 `/lang zh` 要背参数，打开菜单却选不了，等于没做完。
+struct LangPicker {
+    selected: usize,
+}
+
+/// 可选的语言，顺序即菜单顺序
+const LANGS: [Lang; 2] = [Lang::En, Lang::Zh];
+
+fn lang_desc(lang: Lang) -> &'static str {
+    match lang {
+        Lang::En => tr("默认语言"),
+        Lang::Zh => tr("中文界面"),
+    }
+}
+
 pub struct AppState {
     pub transcript: Transcript,
     pub scroll: Scroll,
@@ -251,6 +276,8 @@ pub struct AppState {
     pub mode: Mode,
     /// 逐条确认模式下等待答复的改动
     confirm: Option<Confirm>,
+    /// `/lang` 打开的语言选择；打开时键盘归它
+    picker: Option<LangPicker>,
 }
 
 impl AppState {
@@ -276,6 +303,7 @@ impl AppState {
             form: None,
             mode: Mode::default(),
             confirm: None,
+            picker: None,
         }
     }
 
@@ -349,6 +377,16 @@ impl AppState {
                 selected: r.selected,
             });
         }
+        if let Some(p) = &self.picker {
+            return Some(Choice {
+                title: tr("界面语言").into(),
+                items: LANGS
+                    .iter()
+                    .map(|&l| (l.label().to_string(), lang_desc(l).to_string()))
+                    .collect(),
+                selected: p.selected,
+            });
+        }
         if let Some(f) = &self.form {
             return Some(f.choice());
         }
@@ -383,7 +421,11 @@ impl AppState {
 
     /// 输入框当前能不能输入：确认、选择器打开时，或表单停在没有文本的行上时不能
     pub fn input_active(&self) -> bool {
-        if self.confirm.is_some() || self.review.is_some() || self.sessions.is_some() {
+        if self.confirm.is_some()
+            || self.review.is_some()
+            || self.sessions.is_some()
+            || self.picker.is_some()
+        {
             return false;
         }
         match &self.form {
@@ -522,6 +564,9 @@ impl AppState {
         if self.form.is_some() {
             return self.on_form_key(key);
         }
+        if self.picker.is_some() {
+            return self.on_picker_key(key);
+        }
         if self.busy.is_some() {
             // 忙碌时只响应取消；输入框仍可编辑，方便先写下一条
             if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
@@ -573,6 +618,35 @@ impl AppState {
             && self.review.is_none()
             && self.sessions.is_none()
             && self.form.is_none()
+            && self.picker.is_none()
+    }
+
+    fn on_picker_key(&mut self, key: KeyEvent) -> Action {
+        let n = LANGS.len();
+        let mut close = false;
+        let Some(p) = self.picker.as_mut() else {
+            return Action::None;
+        };
+        let action = match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                p.selected = (p.selected + n - 1) % n;
+                Action::None
+            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                p.selected = (p.selected + 1) % n;
+                Action::None
+            }
+            KeyCode::Enter => Action::SetLang(LANGS[p.selected]),
+            KeyCode::Esc | KeyCode::Char('q') => {
+                close = true;
+                Action::None
+            }
+            _ => Action::None,
+        };
+        if close {
+            self.picker = None;
+        }
+        action
     }
 
     fn on_confirm_key(&mut self, key: KeyEvent) -> Action {
@@ -675,6 +749,17 @@ impl AppState {
         self.form = None;
     }
 
+    /// 打开语言选择，光标停在当前语言上
+    pub fn open_lang_picker(&mut self) {
+        let current = crate::i18n::current();
+        let selected = LANGS.iter().position(|&l| l == current).unwrap_or(0);
+        self.picker = Some(LangPicker { selected });
+    }
+
+    pub fn close_picker(&mut self) {
+        self.picker = None;
+    }
+
     fn on_form_key(&mut self, key: KeyEvent) -> Action {
         let Some(form) = self.form.as_mut() else {
             return Action::None;
@@ -720,6 +805,9 @@ impl AppState {
         }
         if self.sessions.is_some() {
             return Some(sessions_hint());
+        }
+        if self.picker.is_some() {
+            return Some(picker_hint());
         }
         self.form.as_ref().map(ModelForm::hint)
     }
@@ -1364,5 +1452,37 @@ mod tests {
         app.ask_confirm("a.rs".into(), String::new(), "x".into());
         app.end_request();
         assert!(app.choice().is_none(), "任务结束了，没人再等这个答复");
+    }
+
+    #[test]
+    fn the_language_picker_offers_both_languages_and_returns_the_selection() {
+        let mut app = AppState::new();
+        app.open_lang_picker();
+        let choice = app.choice().expect("打开后应当出现选择区");
+        assert_eq!(choice.items.len(), LANGS.len());
+        // 光标停在当前语言上，而不是永远停在第一项
+        let current = crate::i18n::current();
+        assert_eq!(
+            choice.selected,
+            LANGS.iter().position(|&l| l == current).unwrap()
+        );
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::SetLang(LANGS[choice.selected])
+        );
+    }
+
+    #[test]
+    fn the_language_picker_wraps_and_esc_cancels() {
+        let mut app = AppState::new();
+        app.open_lang_picker();
+        let start = app.choice().unwrap().selected;
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(app.choice().unwrap().selected, (start + 1) % LANGS.len());
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.choice().unwrap().selected, start);
+        assert_eq!(app.on_key(key(KeyCode::Esc)), Action::None);
+        assert!(app.choice().is_none(), "Esc 之后选择区应当关掉");
+        assert!(app.input_active(), "关掉之后输入框要恢复");
     }
 }

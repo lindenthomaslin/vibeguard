@@ -7,10 +7,6 @@
 
 pub static TABLE: &[(&str, &str)] = &[
     (
-        "  /lang en 或 /lang zh 切换（默认英文）",
-        "/lang en or /lang zh to switch (English by default)",
-    ),
-    (
         "  /model 表单：↑↓ 切换项 · 直接输入修改 · ←→ 调整思考力度 · Ctrl-S 保存 · Esc 取消",
         "/model form: ↑↓ switch field · type to edit · ←→ thinking effort · Ctrl-S save · Esc cancel",
     ),
@@ -910,7 +906,6 @@ pub static TABLE: &[(&str, &str)] = &[
     ),
     ("界面主题已切换为：{theme}", "Theme switched to: {theme}"),
     ("界面主题：{}", "Theme: {}"),
-    ("界面语言 ", "Language "),
     (
         "界面语言：英文（默认）/ 中文",
         "Language: English (default) / Chinese",
@@ -1171,4 +1166,7 @@ pub static TABLE: &[(&str, &str)] = &[
         "当前工作模式是 plan（强制只读），这个权限暂时不生效：按 Shift-Tab 切到 confirm 或 auto",
         "The current work mode is plan (forced read-only), so this permission has no effect for now: press Shift-Tab for confirm or auto",
     ),
+    ("界面语言", "Language"),
+    ("默认语言", "Default"),
+    ("中文界面", "Chinese interface"),
 ];
