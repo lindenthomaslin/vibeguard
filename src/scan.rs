@@ -92,7 +92,7 @@ const RULES: &[Rule] = &[
     },
     Rule {
         id: "AUTH-05",
-        pattern: r#"(?i)\b(md5|sha1)\s*\(""#,
+        pattern: r#"(?i)\b(md5|sha1)\s*\("#,
         exts: CODE,
         names: &[],
         note: "MD5/SHA1 已不适合用于口令或签名",
@@ -408,8 +408,11 @@ pub fn scan_local(root: &Path, checklist: &VulnChecklist) -> LocalReport {
                 if hits >= PER_RULE_PER_FILE || findings.len() >= MAX_FINDINGS {
                     break;
                 }
+                // 占位符过滤只对密钥类规则有意义。以前对所有规则都过滤，
+                // 结果一行里出现 example 就把 XSS、外链这类规则一起关掉了。
+                let secret_rule = c.rule.id == "CONF-01";
                 if !c.regex.is_match(line)
-                    || looks_like_placeholder(line)
+                    || (secret_rule && looks_like_placeholder(line))
                     || line.contains(IGNORE_LINE)
                 {
                     continue;

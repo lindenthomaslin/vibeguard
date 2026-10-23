@@ -1,4 +1,6 @@
 mod app;
+#[cfg(test)]
+mod bench;
 mod chat;
 mod commands;
 mod config;

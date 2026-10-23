@@ -1404,19 +1404,22 @@ impl Session<'_> {
             let _ = tx.send(Msg::ScanDone(req, report));
 
             let Some(client) = client else { return };
-            let digest_root = root.clone();
-            let Ok(full) =
-                tokio::task::spawn_blocking(move || crate::scan_ai::digest(&digest_root)).await
+            // 建一次索引：文件树 + 所有能读的正文。之后每批按关键词从这里检索，
+            // 而不是把同一份摘要发给所有批次
+            let index_root = root.clone();
+            let Ok(index) =
+                tokio::task::spawn_blocking(move || crate::scan_ai::Index::build(&index_root))
+                    .await
             else {
                 let _ = tx.send(Msg::ScanProgress(
                     req,
-                    "生成仓库摘要失败，跳过模型判定".into(),
+                    "建立仓库索引失败，跳过模型判定".into(),
                 ));
                 return;
             };
             let snapshot = crate::scan_ai::ScanDigest {
-                hash: full.hash(),
-                files: full.file_hashes(),
+                hash: index.hash(),
+                files: index.file_hashes(),
             };
 
             // 上次的存档：决定这一轮是「什么都不用判」「只判变过的」还是「全量」
@@ -1468,20 +1471,11 @@ impl Session<'_> {
                 incremental = !changed.is_empty();
             }
 
-            // 增量时只把变过的文件正文给模型，文件树仍然给全
-            let digest = if incremental {
-                let scope_root = root.clone();
-                let scope_changed = changed.clone();
-                match tokio::task::spawn_blocking(move || {
-                    crate::scan_ai::scoped_digest(&scope_root, &scope_changed)
-                })
-                .await
-                {
-                    Ok(d) => d,
-                    Err(_) => full,
-                }
+            // 增量时检索范围收窄到变过的文件，文件树仍然给全
+            let index = if incremental {
+                index.scoped(&changed)
             } else {
-                full
+                index
             };
 
             if incremental {
@@ -1514,11 +1508,11 @@ impl Session<'_> {
             // 并发跑：串行 7 批 × 十几秒就是两分钟的干等。3 路是折中——
             // 再多容易撞上端点的速率限制，反而更慢。
             let client = std::sync::Arc::new(client);
-            let digest = std::sync::Arc::new(digest);
+            let index = std::sync::Arc::new(index);
             let results = futures_util::stream::iter(batches.into_iter().enumerate())
                 .map(|(i, batch)| {
                     let client = std::sync::Arc::clone(&client);
-                    let digest = std::sync::Arc::clone(&digest);
+                    let index = std::sync::Arc::clone(&index);
                     let tx = tx.clone();
                     async move {
                         let _ = tx.send(Msg::ScanProgress(
@@ -1530,7 +1524,7 @@ impl Session<'_> {
                                 batch.items.len()
                             ),
                         ));
-                        let messages = [Message::user(crate::scan_ai::prompt(&batch, &digest))];
+                        let messages = [Message::user(crate::scan_ai::prompt(&batch, &index))];
                         let opts = ChatOptions {
                             json: true,
                             max_tokens: Some(4000),

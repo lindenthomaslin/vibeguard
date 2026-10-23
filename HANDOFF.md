@@ -297,6 +297,9 @@ src/
   scan.rs        Local rule engine: walk, match, `file:line`, ignore markers
   vuln_checklist.rs  410-item checklist, parsed from assets/checklist.tsv
   repl.rs        Non-interactive fallback (line-based, no TUI)
+bench/
+  fixtures/      A small repo with one seeded instance of every local rule
+  expected.tsv   What must be found, by hand — `cargo test bench` scores precision/recall
 assets/
   checklist.tsv  The checklist itself — id, severity, category, detect, fix, CWE
   vibe-coding-checklist.md   The source document the TSV is generated from

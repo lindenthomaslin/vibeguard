@@ -265,6 +265,9 @@ src/
   scan.rs        本地规则引擎：遍历、匹配、`文件:行号`、忽略标记
   vuln_checklist.rs  410 条清单，从 assets/checklist.tsv 解析
   repl.rs        非交互兜底（按行读，没有 TUI）
+bench/
+  fixtures/      一个样例仓库，每条本地规则各埋一处
+  expected.tsv   手工维护的期望值——`cargo test bench` 算准召
 assets/
   checklist.tsv  清单本体——编号、级别、分类、检测点、修复要点、CWE
   vibe-coding-checklist.md  生成 TSV 的源文档

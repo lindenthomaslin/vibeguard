@@ -22,10 +22,6 @@ pub const BATCH: usize = 60;
 /// 增量扫描时一批能装更多：摘要里只剩变过的几个文件，输入小了一个量级，
 /// 输出（每条一行判定）成了瓶颈。130 条大约 4k tokens，留了余量。
 pub const BATCH_INCREMENTAL: usize = 130;
-/// 仓库摘要里正文的总预算（字符），超了就只留文件树
-const DIGEST_BUDGET: usize = 40_000;
-/// 单个文件最多塞进去多少字符
-const FILE_BUDGET: usize = 8_000;
 /// 文件树最多列多少行
 const TREE_LINES: usize = 300;
 
@@ -133,14 +129,6 @@ pub fn batches_with(checklist: &VulnChecklist, skip: &[&str], size: usize) -> Ve
     out
 }
 
-/// 仓库摘要：文件树 + 挑出来的源码
-pub struct Digest {
-    pub tree: String,
-    pub files: Vec<(String, String)>,
-    /// 因为预算被省略的文件数
-    pub omitted: usize,
-}
-
 /// 名字里带这些词的文件优先塞进摘要——安全问题和它们最相关
 const HOT_WORDS: &[&str] = &[
     "auth",
@@ -211,62 +199,10 @@ const CODE_EXTS: &[&str] = &[
     "Dockerfile",
 ];
 
-impl Digest {
-    /// 参与判定的每个文件的内容哈希
-    pub fn file_hashes(&self) -> std::collections::BTreeMap<String, u64> {
-        self.files
-            .iter()
-            .map(|(path, body)| (path.clone(), hash_of(body)))
-            .collect()
-    }
-
-    /// 整份摘要的指纹：文件树 + 每个文件内容。一样就说明「这一轮没什么可重判的」。
-    pub fn hash(&self) -> u64 {
-        let mut h = DefaultHasher::new();
-        self.tree.hash(&mut h);
-        for (path, body) in &self.files {
-            path.hash(&mut h);
-            body.hash(&mut h);
-        }
-        h.finish()
-    }
-}
-
 fn hash_of(s: &str) -> u64 {
     let mut h = DefaultHasher::new();
     s.hash(&mut h);
     h.finish()
-}
-
-/// 只把「变过的文件」正文放进摘要，文件树仍然给全——
-/// 像「鉴权中间件挂没挂」这类判断需要知道项目长什么样，
-/// 但不需要再看一遍没变过的代码。
-pub fn scoped_digest(root: &Path, changed: &[String]) -> Digest {
-    let paths = collect_paths(root);
-    let tree = tree_of(&paths);
-    let mut files = Vec::new();
-    let mut used = 0usize;
-    let mut omitted = 0usize;
-    for rel in changed {
-        if !paths.iter().any(|(p, _)| p == rel) {
-            continue; // 已经删掉的文件，没什么可给的
-        }
-        let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
-            omitted += 1;
-            continue;
-        };
-        if used + text.len() > DIGEST_BUDGET {
-            omitted += 1;
-            continue;
-        }
-        used += text.len();
-        files.push((rel.clone(), clip(&text, FILE_BUDGET)));
-    }
-    Digest {
-        tree,
-        files,
-        omitted,
-    }
 }
 
 fn collect_paths(root: &Path) -> Vec<(String, bool)> {
@@ -335,30 +271,459 @@ fn tree_of(paths: &[(String, bool)]) -> String {
         .join("\n")
 }
 
-pub fn digest(root: &Path) -> Digest {
-    let paths = collect_paths(root);
-    let tree = tree_of(&paths);
+/// 一个可检索的源文件
+struct Doc {
+    path: String,
+    body: String,
+    /// 小写副本，只用来打分；展示时用 `body`
+    lower: String,
+    hash: u64,
+}
 
-    let mut files = Vec::new();
-    let mut used = 0usize;
-    let mut omitted = 0usize;
-    for (rel, _) in &paths {
-        let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
-            omitted += 1;
-            continue;
-        };
-        if used + text.len() > DIGEST_BUDGET {
-            omitted += 1;
-            continue;
+/// 仓库索引：文件树 + 每个文件的正文。
+///
+/// 上一版是「把一份 40KB 的摘要丢给所有批次」——390 条清单条目抢这 40KB，
+/// 平均每条只有一百来字节的上下文，模型只能靠常识猜。现在改成按批检索：
+/// 用这一批条目的关键词去仓库里找相关文件，命中多少给多少。
+pub struct Index {
+    pub tree: String,
+    docs: Vec<Doc>,
+    /// 太大或读不出来、没进索引的文件数
+    pub skipped: usize,
+}
+
+/// 单个文件进索引的上限；再大就不是「读代码」，是「灌数据」
+const INDEX_FILE_BUDGET: usize = 200_000;
+/// 整个索引的上限：内存里同时放正文和小写副本，别把大仓库撑爆
+const INDEX_TOTAL_BUDGET: usize = 8_000_000;
+/// 一批最多附多少代码
+const RETRIEVE_BUDGET: usize = 16_000;
+/// 单个文件最多摘多少：给的是「命中位置前后几十行」，不是整个文件，
+/// 所以可以多带几个文件，而不是让一个 10KB 的文件吃掉全部预算
+const SNIPPET_BUDGET: usize = 3_000;
+
+impl Index {
+    pub fn build(root: &Path) -> Index {
+        let paths = collect_paths(root);
+        let tree = tree_of(&paths);
+        let mut docs = Vec::new();
+        let mut skipped = 0usize;
+        let mut used = 0usize;
+        for (rel, _) in &paths {
+            let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
+                skipped += 1;
+                continue;
+            };
+            if text.len() > INDEX_FILE_BUDGET || used + text.len() > INDEX_TOTAL_BUDGET {
+                skipped += 1;
+                continue;
+            }
+            used += text.len();
+            docs.push(Doc {
+                path: rel.clone(),
+                hash: hash_of(&text),
+                lower: text.to_lowercase(),
+                body: text,
+            });
         }
-        used += text.len();
-        files.push((rel.clone(), clip(&text, FILE_BUDGET)));
+        Index {
+            tree,
+            docs,
+            skipped,
+        }
     }
 
-    Digest {
-        tree,
-        files,
-        omitted,
+    /// 整个仓库的指纹：文件树 + 每个文件的内容
+    pub fn hash(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        self.tree.hash(&mut h);
+        for d in &self.docs {
+            d.path.hash(&mut h);
+            d.hash.hash(&mut h);
+        }
+        h.finish()
+    }
+
+    /// 参与索引的每个文件的内容哈希
+    pub fn file_hashes(&self) -> std::collections::BTreeMap<String, u64> {
+        self.docs.iter().map(|d| (d.path.clone(), d.hash)).collect()
+    }
+
+    /// 只保留指定文件的视图（增量扫描：只看变过的）
+    pub fn scoped(&self, changed: &[String]) -> Index {
+        Index {
+            tree: self.tree.clone(),
+            docs: self
+                .docs
+                .iter()
+                .filter(|d| changed.iter().any(|c| c == &d.path))
+                .map(|d| Doc {
+                    path: d.path.clone(),
+                    body: d.body.clone(),
+                    lower: d.lower.clone(),
+                    hash: d.hash,
+                })
+                .collect(),
+            skipped: self.skipped,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.docs.len()
+    }
+
+    /// 按这一批条目的关键词挑文件。
+    ///
+    /// **每条条目各自检索，再取并集**。一开始是「把整批 60 条的关键词混在一起
+    /// 打分」，结果注入类那一批挑出了 Cargo.toml——因为几百个词互相稀释，
+    /// 谁命中一两个都能得分。按条目分开之后，每个文件至少要为某一条负责。
+    pub fn retrieve(&self, batch: &Batch, budget: usize) -> Vec<(String, String)> {
+        if self.docs.is_empty() {
+            return Vec::new();
+        }
+        let total = self.docs.len();
+        // 文档频率算一次，所有条目共用
+        let all = keywords(batch);
+        let df: std::collections::HashMap<&str, usize> = all
+            .iter()
+            .map(|k| {
+                let n = self
+                    .docs
+                    .iter()
+                    .filter(|d| d.lower.contains(k.as_str()))
+                    .count();
+                (k.as_str(), n)
+            })
+            .collect();
+
+        // 文件下标 → (最好分数, 让它命中的关键词)
+        let mut best: std::collections::HashMap<usize, (f32, Vec<String>)> = Default::default();
+        for item in &batch.items {
+            let keys = item_keywords(item);
+            if keys.is_empty() {
+                continue;
+            }
+            let mut scored: Vec<(f32, usize)> = self
+                .docs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, d)| {
+                    let path_lower = d.path.to_lowercase();
+                    let mut score = 0.0f32;
+                    for k in &keys {
+                        // 没出现过，或者超过 60% 的文件都有（太常见，没区分度）
+                        let n = *df.get(k.as_str()).unwrap_or(&0);
+                        if n == 0 || n * 5 > total * 3 {
+                            continue;
+                        }
+                        if d.lower.contains(k.as_str()) {
+                            score += 1.0 / (1.0 + (n as f32).ln());
+                            if path_lower.contains(k.as_str()) {
+                                score += 0.5;
+                            }
+                        }
+                    }
+                    // 按文件长度开方归一：不归一的话，最大的文件总是赢，
+                    // 因为它「碰巧」包含更多词
+                    let norm = (d.body.len() as f32).sqrt().max(1.0);
+                    let score = score / norm;
+                    (score > 0.0).then_some((score, i))
+                })
+                .collect();
+            scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            // 每条只取最相关的 3 个文件，避免一条条目霸占预算
+            for (score, i) in scored.into_iter().take(3) {
+                let e = best.entry(i).or_insert((0.0, Vec::new()));
+                if score > e.0 {
+                    *e = (score, keys.clone());
+                }
+            }
+        }
+
+        let mut ranked: Vec<(f32, &Doc, Vec<String>)> = best
+            .into_iter()
+            .map(|(i, (s, keys))| (s, &self.docs[i], keys))
+            .collect();
+        ranked.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.path.len().cmp(&b.1.path.len()))
+                .then_with(|| a.1.path.cmp(&b.1.path))
+        });
+
+        let mut out = Vec::new();
+        let mut used = 0usize;
+        for (_, doc, keys) in &ranked {
+            let piece = excerpt(doc, keys, SNIPPET_BUDGET);
+            if used + piece.len() > budget {
+                continue;
+            }
+            used += piece.len();
+            out.push((doc.path.clone(), piece));
+        }
+
+        // 一个词都没命中（条目全是中文描述时会发生）：退回按顺序挑几个，
+        // 总比让模型对着空上下文瞎猜强
+        if out.is_empty() {
+            for doc in self.docs.iter().take(4) {
+                let piece = clip(&doc.body, SNIPPET_BUDGET);
+                if used + piece.len() > budget {
+                    break;
+                }
+                used += piece.len();
+                out.push((doc.path.clone(), piece));
+            }
+        }
+        out
+    }
+}
+
+/// 摘出命中位置附近的代码，**每行带行号**。
+///
+/// 带行号是有意的：提示词要求模型给出 `文件:行号`，不给行号它只能数，
+/// 数错的概率很高——而那正是我们刚刚开始核实的东西。
+fn excerpt(doc: &Doc, keys: &[String], max: usize) -> String {
+    let lines: Vec<&str> = doc.body.lines().collect();
+    let hit = lines.iter().position(|l| {
+        let low = l.to_lowercase();
+        keys.iter().any(|k| low.contains(k.as_str()))
+    });
+    let Some(i) = hit else {
+        return clip(&doc.body, max);
+    };
+    let start = i.saturating_sub(20);
+    let end = (i + 40).min(lines.len());
+    let mut out = String::new();
+    if start > 0 {
+        out.push_str(&format!("…（前 {start} 行省略）\n"));
+    }
+    for (n, line) in lines[start..end].iter().enumerate() {
+        out.push_str(&format!("{:>5}  {line}\n", start + n + 1));
+    }
+    if end < lines.len() {
+        out.push_str(&format!("…（后面还有 {} 行）\n", lines.len() - end));
+    }
+    clip(&out, max)
+}
+
+/// 单条条目的检索关键词
+fn item_keywords(item: &VulnItem) -> Vec<String> {
+    let mut out: std::collections::BTreeSet<String> = Default::default();
+    for text in [&item.title, &item.detect_point] {
+        for tok in tokens(text) {
+            out.insert(tok);
+        }
+    }
+    for hint in category_hints(&item.category) {
+        out.insert((*hint).to_string());
+    }
+    // 一条条目用不着几十个词，太多会互相稀释
+    let mut v: Vec<String> = out.into_iter().collect();
+    v.truncate(24);
+    v
+}
+
+/// 检索用的停用词：这些词在任何代码里都有，拿来打分只会把结果拉平
+const STOP: &[&str] = &[
+    "the", "and", "for", "with", "that", "this", "from", "are", "not", "but", "all", "any", "can",
+    "has", "have", "its", "may", "use", "used", "when", "which", "will", "you", "your", "http",
+    "https", "com", "www", "src",
+];
+
+/// 每一类漏洞该去哪些词里找。清单标题多是中文，直接拿去检索几乎命中不了，
+/// 所以按分类补一组「代码里真会出现」的词。
+pub fn category_hints(category: &str) -> &'static [&'static str] {
+    match category.chars().next() {
+        Some('A') => &[
+            "auth", "login", "signin", "session", "password", "user", "token", "jwt", "register",
+            "oauth",
+        ],
+        Some('B') => &[
+            "api",
+            "route",
+            "router",
+            "controller",
+            "handler",
+            "endpoint",
+            "order",
+            "user",
+            "permission",
+            "role",
+            "admin",
+            "owner",
+        ],
+        Some('C') => &[
+            "session", "cookie", "token", "jwt", "refresh", "logout", "csrf", "expire",
+        ],
+        Some('D') => &[
+            "sql",
+            "query",
+            "execute",
+            "cursor",
+            "subprocess",
+            "exec",
+            "eval",
+            "shell",
+            "cmd",
+            "orm",
+            "template",
+            "render",
+        ],
+        Some('E') => &[
+            "validate", "sanitize", "parse", "schema", "dto", "form", "input", "param", "query",
+            "body",
+        ],
+        Some('F') => &[
+            "upload",
+            "file",
+            "path",
+            "filename",
+            "ext",
+            "mime",
+            "zip",
+            "tar",
+            "download",
+            "multipart",
+        ],
+        Some('G') => &[
+            "http", "https", "tls", "ssl", "verify", "cors", "origin", "header", "proxy",
+        ],
+        Some('H') => &[
+            "api",
+            "route",
+            "rate",
+            "limit",
+            "throttle",
+            "middleware",
+            "cors",
+            "status",
+            "error",
+        ],
+        Some('I') => &[
+            "encrypt", "decrypt", "cipher", "hash", "md5", "sha", "aes", "rsa", "random", "salt",
+            "iv",
+        ],
+        Some('J') => &[
+            "key",
+            "secret",
+            "token",
+            "password",
+            "env",
+            "config",
+            "credential",
+            "api_key",
+        ],
+        Some('K') => &[
+            "price", "amount", "total", "coupon", "discount", "order", "balance", "quota", "points",
+        ],
+        Some('L') => &[
+            "pii", "email", "phone", "address", "log", "export", "dump", "backup", "mask",
+        ],
+        Some('M') => &[
+            "innerhtml",
+            "dangerouslysetinnerhtml",
+            "v-html",
+            "localstorage",
+            "document",
+            "window",
+            "eval",
+            "cookie",
+            "token",
+            "script",
+        ],
+        Some('N') => &[
+            "package.json",
+            "requirements",
+            "lock",
+            "dependency",
+            "version",
+            "npm",
+            "pip",
+        ],
+        Some('O') => &[
+            "dockerfile",
+            "docker-compose",
+            "k8s",
+            "yaml",
+            "terraform",
+            "iam",
+            "s3",
+            "bucket",
+            "root",
+        ],
+        Some('P') => &[
+            "lock", "mutex", "thread", "async", "await", "queue", "pool", "timeout", "retry",
+            "limit",
+        ],
+        Some('Q') => &[
+            "log",
+            "logger",
+            "audit",
+            "trace",
+            "error",
+            "exception",
+            "alert",
+            "metric",
+        ],
+        Some('R') => &[
+            "prompt",
+            "llm",
+            "agent",
+            "model",
+            "tool",
+            "openai",
+            "embedding",
+            "completion",
+        ],
+        Some('S') => &[
+            "todo",
+            "unwrap",
+            "expect",
+            "panic",
+            "null",
+            "undefined",
+            "any",
+            "lint",
+        ],
+        _ => &[],
+    }
+}
+
+/// 一批条目的关键词并集，只用来算文档频率
+fn keywords(batch: &Batch) -> Vec<String> {
+    let mut out: std::collections::BTreeSet<String> = Default::default();
+    for item in &batch.items {
+        for k in item_keywords(item) {
+            out.insert(k);
+        }
+    }
+    // 关键词太多会互相稀释，一批 60 条也就用到前 120 个
+    let mut v: Vec<String> = out.into_iter().collect();
+    v.truncate(120);
+    v
+}
+
+/// 抽出代码里可能出现的词：ASCII 标识符，长度 ≥ 3
+fn tokens(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' {
+            cur.push(c.to_ascii_lowercase());
+        } else {
+            push_token(&mut out, &mut cur);
+        }
+    }
+    push_token(&mut out, &mut cur);
+    out
+}
+
+fn push_token(out: &mut Vec<String>, cur: &mut String) {
+    let numeric = cur.chars().all(|c| c.is_ascii_digit());
+    if cur.len() >= 3 && !numeric && !STOP.contains(&cur.as_str()) {
+        out.push(std::mem::take(cur));
+    } else {
+        cur.clear();
     }
 }
 
@@ -371,11 +736,14 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 /// 拼提示词。`json` 这个词必须出现，否则 DeepSeek 的 json 模式会报错。
-pub fn prompt(batch: &Batch, digest: &Digest) -> String {
+pub fn prompt(batch: &Batch, index: &Index) -> String {
+    // 这一批要看的代码：按条目关键词从索引里检索出来，而不是全仓库一份摘要
+    let files = index.retrieve(batch, RETRIEVE_BUDGET);
     let mut out = String::new();
     out.push_str(
         "你是安全审计员，正在审计一个可能由 AI 生成的代码库（vibe coding）。\n\
-         下面给出仓库摘要，以及一批需要你判断的漏洞核对条目。\n\n\
+         下面给出仓库文件树、与本批条目相关的代码，以及一批需要你判断的漏洞核对条目。\n\
+         代码是按关键词挑出来的，可能不完整；看不出来就写 undetermined。\n\n\
          对每一条，判断它在本仓库中的状态，并给出证据：\n\
          - exists：你确实看到了有问题的代码\n\
          - suspected：看起来像，但证据不足\n\
@@ -390,18 +758,23 @@ pub fn prompt(batch: &Batch, digest: &Digest) -> String {
     );
 
     out.push_str("## 仓库文件树\n```\n");
-    out.push_str(&digest.tree);
+    out.push_str(&index.tree);
     out.push_str("\n```\n\n");
 
-    if !digest.files.is_empty() {
-        out.push_str("## 关键文件内容\n");
-        for (path, body) in &digest.files {
+    if files.is_empty() {
+        out.push_str(
+            "## 相关代码\n（这个仓库里没找到和本批条目相关的代码。\
+             判断不了就写 undetermined，并在 reason 里说明缺什么。）\n\n",
+        );
+    } else {
+        out.push_str("## 与本批条目相关的代码（按关键词检索挑出来的，不是全部）\n");
+        for (path, body) in &files {
             out.push_str(&format!("### {path}\n```\n{body}\n```\n\n"));
         }
-        if digest.omitted > 0 {
+        let rest = index.len().saturating_sub(files.len());
+        if rest > 0 {
             out.push_str(&format!(
-                "（另有 {} 个文件因篇幅未列出）\n\n",
-                digest.omitted
+                "（仓库里另有 {rest} 个文件与本批条目不相关，未列出）\n\n"
             ));
         }
     }
@@ -724,31 +1097,122 @@ mod tests {
     }
 
     #[test]
-    fn digest_prefers_security_relevant_files_and_respects_the_budget() {
+    fn the_index_skips_dependency_directories_and_lists_the_tree() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("auth.rs"), "fn login() {}".repeat(50)).unwrap();
         fs::write(dir.path().join("random.rs"), "// nothing").unwrap();
         fs::create_dir_all(dir.path().join("node_modules")).unwrap();
         fs::write(dir.path().join("node_modules/x.js"), "junk").unwrap();
 
-        let d = digest(dir.path());
-        assert!(d.tree.contains("auth.rs"));
-        assert!(!d.tree.contains("node_modules"), "依赖目录不该进摘要");
-        assert_eq!(d.files[0].0, "auth.rs", "热点文件排第一");
-        let total: usize = d.files.iter().map(|(_, b)| b.len()).sum();
-        assert!(total <= DIGEST_BUDGET + FILE_BUDGET * 2);
+        let idx = Index::build(dir.path());
+        assert!(idx.tree.contains("auth.rs"));
+        assert!(!idx.tree.contains("node_modules"), "依赖目录不该进索引");
+        assert_eq!(idx.len(), 2);
+    }
+
+    #[test]
+    fn retrieval_picks_the_file_that_actually_talks_about_the_item() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("api")).unwrap();
+        fs::write(
+            dir.path().join("api/orders.py"),
+            "def get_order(oid):\n    return db.execute('select * from orders where id = ?', (oid,))\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("styles.css"), "body { color: red }\n").unwrap();
+        fs::write(dir.path().join("README.md"), "# demo\n").unwrap();
+
+        let idx = Index::build(dir.path());
+        // 只留一条 AUTHZ（授权/越权）类的条目
+        let list = VulnChecklist::new();
+        let item = list
+            .by_category("B. 授权与越权")
+            .into_iter()
+            .next()
+            .expect("清单里应当有授权类条目");
+        let batch = Batch {
+            label: "B".into(),
+            items: vec![item.clone()],
+        };
+        let got = idx.retrieve(&batch, RETRIEVE_BUDGET);
+        let paths: Vec<&str> = got.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(paths.contains(&"api/orders.py"), "{paths:?}");
+        assert!(!paths.contains(&"styles.css"), "不相关的文件不该被选中");
+    }
+
+    #[test]
+    fn excerpts_carry_line_numbers_so_the_model_can_cite_them() {
+        let dir = tempdir().unwrap();
+        let body: Vec<String> = (1..=80).map(|i| format!("line{i}")).collect();
+        fs::write(dir.path().join("a.py"), body.join("\n")).unwrap();
+        let idx = Index::build(dir.path());
+        let doc = &idx.docs[0];
+        let out = excerpt(doc, &["line40".to_string()], SNIPPET_BUDGET);
+        assert!(out.contains("   40  line40"), "{out}");
+        assert!(out.contains("行省略"), "要标出省略，{out}");
+        assert!(out.contains("后面还有"), "{out}");
+    }
+
+    #[test]
+    fn retrieval_respects_the_budget() {
+        let dir = tempdir().unwrap();
+        for i in 0..5 {
+            fs::write(
+                dir.path().join(format!("f{i}.py")),
+                "query = 'select * from users where id = ?'\n".repeat(200),
+            )
+            .unwrap();
+        }
+        let idx = Index::build(dir.path());
+        let list = VulnChecklist::new();
+        let batch = Batch {
+            label: "D".into(),
+            items: list
+                .by_category("D. 注入类")
+                .into_iter()
+                .take(3)
+                .cloned()
+                .collect(),
+        };
+        let got = idx.retrieve(&batch, 5_000);
+        let total: usize = got.iter().map(|(_, b)| b.len()).sum();
+        assert!(total <= 5_000, "预算要守住，实际 {total}");
+    }
+
+    #[test]
+    fn a_scoped_index_only_looks_at_the_files_that_changed() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.py"), "login()\n").unwrap();
+        fs::write(dir.path().join("b.py"), "login()\n").unwrap();
+        let idx = Index::build(dir.path());
+        let scoped = idx.scoped(&["b.py".to_string()]);
+        assert_eq!(scoped.len(), 1);
+        let list = VulnChecklist::new();
+        let batch = Batch {
+            label: "A".into(),
+            items: list
+                .by_category("A. 认证与账号")
+                .into_iter()
+                .take(2)
+                .cloned()
+                .collect(),
+        };
+        let paths: Vec<String> = scoped
+            .retrieve(&batch, RETRIEVE_BUDGET)
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert!(paths.iter().all(|p| p == "b.py"), "{paths:?}");
     }
 
     #[test]
     fn prompt_lists_every_item_and_asks_for_json() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.py"), "print(1)\n").unwrap();
+        let idx = Index::build(dir.path());
         let list = VulnChecklist::new();
         let b = &batches_with(&list, &[], BATCH)[0];
-        let d = Digest {
-            tree: "a.py".into(),
-            files: vec![("a.py".into(), "print(1)".into())],
-            omitted: 0,
-        };
-        let p = prompt(b, &d);
+        let p = prompt(b, &idx);
         for item in &b.items {
             assert!(p.contains(&item.id), "提示词里少了 {}", item.id);
         }

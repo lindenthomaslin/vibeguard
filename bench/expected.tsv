@@ -1,0 +1,23 @@
+# 标定集：每行一条「应当被本地规则命中」的漏洞
+# 格式：清单编号	文件	行号
+# 改 fixtures 之后必须同步改这里，否则测试会红——这正是它存在的意义
+CONF-01	app.py	5
+INJ-08	app.py	8
+AUTH-05	app.py	11
+INJ-28	app.py	14
+INJ-27	app.py	17
+CONF-08	app.py	19
+INJ-09	shell.py	4
+INJ-16	web.ts	2
+SESS-07	web.ts	6
+CRYPTO-07	web.ts	10
+INJ-01	db.py	5
+FILE-04	upload.py	4
+NET-13	client.py	4
+NET-07	server.py	5
+CRYPTO-02	crypto.py	4
+INJ-29	xml.py	4
+QUAL-03	quality.py	4
+FE-06	templates/index.html	1
+CONF-18	Dockerfile	3
+CONF-19	docker-compose.yml	4

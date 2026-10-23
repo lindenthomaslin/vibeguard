@@ -102,6 +102,9 @@ Early, but no longer a demo. Working today:
   evidence for each one: `exists / suspected / not_found / undetermined`. Items that can only be
   confirmed by running the service (rate limits, brute force, IDOR) are labelled `undetermined`
   rather than quietly passed.
+- **Each batch sees its own evidence.** Instead of one shared digest, every checklist item is
+  matched against the repo by keyword and the surrounding lines are sent with **line numbers**,
+  so `file:line` answers are counted, not guessed.
 - **It only pays for what changed.** Nothing touched since the last scan → zero requests. One file
   edited → the model only sees that file, in 3 requests instead of 7, and the verdicts for
   untouched files carry over. New evidence always wins; an old finding is only dropped when its
