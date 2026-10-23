@@ -90,10 +90,17 @@ vibeguard ping
 
 ## Status
 
-Early. The conversational core is real: streaming chat, five permission-gated tools, the three
-modes, conversation history with search, themes. **The vulnerability scanner is still a skeleton** —
-the finding model exists but is not wired to the UI yet, and two tests in that module are left
-failing on purpose as a marker. Don't trust it to find anything for you today.
+Early, but no longer a demo. Working today:
+
+- streaming chat, five permission-gated tools, the three work modes
+- conversation history with in-memory search and delete
+- **`/scan [path]`** — 20 local rules drawn from the 410-item checklist: hardcoded secrets,
+  `shell=True`, `eval`, SQL concatenation, ECB mode, `innerHTML`, `CORS *`, Dockerfile running as
+  root, and so on. Every hit carries `file:line` and a CWE id. Read-only, no tokens spent.
+
+The remaining ~390 checklist items need the model to read the code and judge — that pass is the
+next milestone. Until it lands, `/scan` tells you exactly what it covered, so you can tell the
+difference between "clean" and "not looked at".
 
 ## Docs
 

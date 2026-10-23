@@ -73,11 +73,12 @@ VibeGuard 就是对这道缝的回应：速度不变，把缺的那一问塞回�
 | 对话持久化、内存内搜索、删除 | ✓ 可用 |
 | 主题（dark / light）与字形风格（default / anime） | ✓ 可用 |
 | `vibeguard config show / init / set`、`vibeguard ping` | ✓ 可用 |
-| 漏洞清单、扫描器、严重级别模型 | ~ 代码在，**没接到界面上**，目前是死代码 |
+| `/scan [路径]`：410 条清单里的 20 条本地规则 | ✓ 可用，只读，给出 `文件:行号` + CWE |
+| 剩下约 390 条的 AI 语义判定 | ✗ 下一个里程碑 |
 | `/demo`：扫描 → 报告 → 逐条确认修复的界面 | ~ 只有示例数据，不读写任何文件 |
 | CI、打包、许可证 | ✗ 还没有 |
 
-扫描器那两个单测是**故意留着红的**（`vuln_scanner::tests::test_quick_scan`、`::test_prioritize`）——它们是「这块还没做完」的记号，不是已经通过的功能。
+410 条清单在 `assets/checklist.tsv` 里（由源文档生成，编译进二进制）。`/scan` 会明确报告这次覆盖了多少条——「没问题」和「没看过」不能长得一样。
 
 ---
 
@@ -255,9 +256,13 @@ src/
   icon.rs        品牌图 → 终端字符格（四分之一方块兜底）
   graphics.rs    终端图形能力探测
   review.rs      逐条修复的状态机
-  scan_ui.rs     漏洞卡片与 diff 渲染
+  scan_ui.rs     漏洞卡片、扫描报告与 diff 渲染
+  scan.rs        本地规则引擎：遍历、匹配、`文件:行号`、忽略标记
+  vuln_checklist.rs  410 条清单，从 assets/checklist.tsv 解析
   repl.rs        非交互兜底（按行读，没有 TUI）
-  vuln_checklist.rs / vuln_scanner.rs / scan_session.rs   ← 还没接上的扫描器骨架
+assets/
+  checklist.tsv  清单本体——编号、级别、分类、检测点、修复要点、CWE
+  vibe-coding-checklist.md  生成 TSV 的源文档
 ```
 
 ---
@@ -280,8 +285,8 @@ cargo clippy --all-targets
 
 ## 11. 已知缺口与下一步
 
-1. **把扫描器接上。** `vuln_checklist` 里的漏洞模型和严重级别都在，但没人调它。目标是让 `/demo` 现在画的那套（发现 → 报告 → 逐条修复）吃真实分析结果，而不是 `review::demo_data()`。
-2. **让那两个失败的测试过掉，或者删掉那个模块。** 它们现在是记号，不是回归保护。
+1. **AI 判定那一遍。** 410 条里 20 条由本地规则决定，其余要靠模型读代码。设计：按分类分批把清单和文件喂进去，每条必须给出 `存在 / 疑似 / 不存在 / 无法判断` 和 `文件:行号`——不接受一句「看着没问题」。
+2. **`/fix`。** 发现已经存在 `AppState::findings` 里，逐条确认的界面（`review.rs`、`Entry::Card`）也在，缺的是把一条发现变成一段 diff。
 3. **没有 CI。** 推上去就跑 `cargo test` 加 `cargo clippy -D warnings`，这类漂移早就被拦住了。
 4. **没有许可证，也没有 CI。** 首页现在由 `README.md` 撑起来了，但许可证还没选，严格说这个仓库现在是「保留所有权利」。
 5. **`run_command` 没有沙箱。** 它要显式开、也挡删除，但在 `full` 权限下一段有耐心的提示词照样能干坏事。这里该有一个路径和命令白名单。

@@ -70,6 +70,8 @@ enum Msg {
         path: String,
         ok: bool,
     },
+    /// 本地规则扫描跑完了
+    ScanDone(u64, crate::scan::LocalReport),
     Tick,
 }
 
@@ -378,6 +380,11 @@ impl Session<'_> {
                 self.state.push(text);
             }
             Msg::Done(req, result) if req == self.req => self.finish_chat(result),
+            Msg::ScanDone(req, report) if req == self.req => {
+                self.finish_task();
+                self.state.findings = report.findings.clone();
+                self.state.push(Entry::Scan(Box::new(report)));
+            }
             // 已取消请求的迟到消息
             Msg::Reasoning(..)
             | Msg::Content(..)
@@ -385,7 +392,8 @@ impl Session<'_> {
             | Msg::Done(..)
             | Msg::Diff { .. }
             | Msg::Proposal { .. }
-            | Msg::Applied { .. } => {
+            | Msg::Applied { .. }
+            | Msg::ScanDone(..) => {
                 return false;
             }
         }
@@ -723,6 +731,37 @@ impl Session<'_> {
 
     /// `/sessions` 和 `/search` 共用：读一遍目录，把列表和正文开头交给面板，
     /// 之后过滤都在内存里做
+    /// `/scan [路径]`：本地规则扫一遍，只读，不碰任何文件。
+    /// 放在后台线程跑，大仓库也不会卡住界面；Esc 可以取消。
+    fn start_scan(&mut self, path: Option<&str>) -> Result<()> {
+        if self.state.busy.is_some() {
+            bail!("正在忙，等这次结束或者按 Esc 取消");
+        }
+        let root = match path {
+            Some(p) => std::path::PathBuf::from(p),
+            None => std::env::current_dir()?,
+        };
+        if !root.is_dir() {
+            bail!("不是一个目录：{}", root.display());
+        }
+        let req = self.next_req();
+        let tx = self.tx.clone();
+        self.state.push(Entry::Info(format!(
+            "正在扫描 {}（本地规则，只读）…",
+            ui::tilde(&root)
+        )));
+        self.state.busy = Some("扫描中…".into());
+        self.task = Some(tokio::spawn(async move {
+            let report = tokio::task::spawn_blocking(move || {
+                crate::scan::scan_local(&root, &crate::vuln_checklist::VulnChecklist::new())
+            })
+            .await
+            .unwrap_or_else(|_| crate::scan::LocalReport::empty());
+            let _ = tx.send(Msg::ScanDone(req, report));
+        }));
+        Ok(())
+    }
+
     fn open_sessions_panel(&mut self, query: &str) -> Result<()> {
         let (entries, skipped) = self.store.catalog()?;
         if skipped > 0 {
@@ -775,6 +814,7 @@ impl Session<'_> {
             "demo" => start_demo(&mut self.state),
             "clear" | "new" => self.new_conversation(),
             "resume" => self.resume_latest()?,
+            "scan" => self.start_scan(args.first().copied())?,
             "sessions" | "history" => self.open_sessions_panel("")?,
             // 关键词直接带进面板的搜索框，进去还能继续改
             "search" => self.open_sessions_panel(&args.join(" "))?,

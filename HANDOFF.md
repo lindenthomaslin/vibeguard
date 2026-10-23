@@ -91,13 +91,14 @@ Be precise about this: the conversational core is real, the scanner is a skeleto
 | Conversation persistence, in-memory search, delete | ✓ works |
 | Themes (dark / light) and glyph styles (default / anime) | ✓ works |
 | `vibeguard config show / init / set`, `vibeguard ping` | ✓ works |
-| Vulnerability checklist, scanner, severity model | ~ code exists, **not wired to the UI**, currently dead code |
+| `/scan [path]` — 20 local rules over the 410-item checklist | ✓ works, read-only, `file:line` + CWE |
+| AI semantic pass over the remaining ~390 items | ✗ next milestone |
 | `/demo` — scan → report → per-fix review screens | ~ sample data only, touches no files |
 | CI, packaging, licence | ✗ not yet |
 
-Two unit tests in the dead scanner module fail (`vuln_scanner::tests::test_quick_scan` and
-`::test_prioritize`) and are left visible on purpose — they are the reminder that the scanner is
-unfinished, not a passing feature.
+The 410-item checklist lives in `assets/checklist.tsv`, generated from the source document and
+compiled into the binary. `/scan` reports which slice of it it actually covered, because "no
+findings" and "not looked at" must never look the same.
 
 ---
 
@@ -287,9 +288,13 @@ src/
   icon.rs        Brand image → terminal cells (quarter-block fallback)
   graphics.rs    Terminal graphics capability probe
   review.rs      Per-fix review state machine
-  scan_ui.rs     Finding cards and diff rendering
+  scan_ui.rs     Finding cards, report and diff rendering
+  scan.rs        Local rule engine: walk, match, `file:line`, ignore markers
+  vuln_checklist.rs  410-item checklist, parsed from assets/checklist.tsv
   repl.rs        Non-interactive fallback (line-based, no TUI)
-  vuln_checklist.rs / vuln_scanner.rs / scan_session.rs   ← unfinished scanner skeleton
+assets/
+  checklist.tsv  The checklist itself — id, severity, category, detect, fix, CWE
+  vibe-coding-checklist.md   The source document the TSV is generated from
 ```
 
 ---
@@ -315,11 +320,11 @@ Conventions worth keeping:
 
 ## 11. Known gaps and next steps
 
-1. **Wire the scanner up.** `vuln_checklist` has the finding model and severities; nothing calls
-   it. The intended flow is what `/demo` already draws (findings → report → per-fix review), fed
-   by real analysis instead of `review::demo_data()`.
-2. **Make the two failing tests pass, or delete the module.** They are currently a marker, not a
-   regression.
+1. **The AI pass.** 20 of 410 items are decided by local rules; the rest need the model to read
+   the code. Design: batch the checklist by category, hand it the relevant files, require
+   `存在 / 疑似 / 不存在 / 无法判断` plus a `file:line` for every verdict — never a bare "looks fine".
+2. **`/fix`.** Findings are stored in `AppState::findings` and the per-fix review UI already
+   exists (`review.rs`, `Entry::Card`); what is missing is turning a finding into a diff.
 3. **No CI.** `cargo test` plus `cargo clippy -D warnings` on push would have caught the drift.
 4. **No licence, no CI.** `README.md` covers the landing page; the licence is still unchosen,
    which makes the repo technically all-rights-reserved.

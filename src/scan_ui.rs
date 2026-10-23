@@ -100,6 +100,87 @@ pub fn summary_lines(findings: &[Finding], look: &Look) -> Vec<Line<'static>> {
     out
 }
 
+/// 一次扫描的完整结果：汇总条 + 逐条列表（按级别从高到低）
+pub fn report_lines(report: &crate::scan::LocalReport, look: &Look) -> Vec<Line<'static>> {
+    let crate::scan::LocalReport {
+        findings,
+        files_scanned,
+        files_skipped,
+        files_with_hits,
+        truncated,
+        rules,
+        checklist_total,
+    } = report;
+    /// 内联最多列这么多条，再多就只给计数——不然一次扫描能把对话刷走
+    const MAX_LISTED: usize = 60;
+
+    let mut out = vec![Line::from(vec![
+        Span::styled(format!("{} ", look.glyphs.info), look.accent()),
+        Span::raw("扫描了 "),
+        Span::styled(files_scanned.to_string(), BOLD),
+        Span::raw(" 个文件，"),
+        Span::styled(files_with_hits.to_string(), BOLD),
+        Span::raw(" 个有问题"),
+        Span::styled(
+            format!("（跳过 {files_skipped} 个：非文本、超大或已标注忽略）"),
+            look.muted(),
+        ),
+    ])];
+    out.push(Line::styled(
+        format!(
+            "  本地规则覆盖清单里的 {rules}/{checklist_total} 条；其余需要模型做语义判断，这一轮还没跑"
+        ),
+        look.muted(),
+    ));
+    out.push(Line::raw(""));
+    out.extend(summary_lines(findings, look));
+
+    let sorted = crate::finding::sorted(findings);
+    if !sorted.is_empty() {
+        out.push(Line::raw(""));
+        for f in sorted.iter().take(MAX_LISTED) {
+            out.push(Line::from(vec![
+                badge(f.severity, look),
+                Span::raw(" "),
+                Span::styled(
+                    format!("{}:{}", f.file, f.line),
+                    Style::new().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::raw(f.title.clone()),
+                Span::styled(
+                    format!(
+                        "  [{}{}]",
+                        f.description
+                            .split(']')
+                            .next()
+                            .unwrap_or("")
+                            .trim_start_matches('['),
+                        f.cwe
+                            .as_deref()
+                            .map(|c| format!(" · {c}"))
+                            .unwrap_or_default()
+                    ),
+                    look.muted(),
+                ),
+            ]));
+        }
+        if sorted.len() > MAX_LISTED {
+            out.push(Line::styled(
+                format!("  … 还有 {} 条未列出", sorted.len() - MAX_LISTED),
+                look.muted(),
+            ));
+        }
+    }
+    if *truncated {
+        out.push(Line::styled(
+            "  结果超过上限，已截断（先修掉手头这些，或调大 MAX_FINDINGS）",
+            look.warn(),
+        ));
+    }
+    out
+}
+
 /// 新增 / 删除的行数
 pub fn diff_stats(old: &str, new: &str) -> (usize, usize) {
     TextDiff::from_lines(old, new)

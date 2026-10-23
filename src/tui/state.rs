@@ -16,6 +16,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 pub const COMMANDS: &[Candidate] = &[
     Candidate { name: "/model", desc: "配置 API 地址、API Key、模型与思考力度" },
     Candidate { name: "/mode", desc: "切换工作模式：计划 / 逐条确认 / 全自动" },
+    Candidate { name: "/scan", desc: "扫描目录：本地规则，给出文件:行号（/scan 路径）" },
     Candidate { name: "/theme", desc: "切换配色：dark / light（Ctrl-T）" },
     Candidate { name: "/font", desc: "切换字形：default / anime" },
     Candidate { name: "/permissions", desc: "配置权限模式和工作目录" },
@@ -114,6 +115,8 @@ pub struct AppState {
     interrupted: bool,
     /// 历史对话面板；打开时键盘和粘贴都归它
     pub sessions: Option<SessionsPanel>,
+    /// 最近一次扫描的结果，`/fix` 之后会用到
+    pub findings: Vec<Finding>,
     /// `/model` 表单；打开时键盘输入都交给它
     form: Option<ModelForm>,
     /// 当前工作模式，决定 AI 能不能改文件、改之前要不要问
@@ -133,6 +136,7 @@ impl AppState {
             tick: 0,
             interrupted: false,
             sessions: None,
+            findings: Vec::new(),
             form: None,
             mode: Mode::default(),
             confirm: None,
@@ -1083,10 +1087,12 @@ mod tests {
     }
 
     #[test]
-    fn the_dev_commands_are_gone_and_mode_took_their_place() {
+    fn only_the_commands_that_actually_work_are_listed() {
         let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
-        for gone in ["/scan", "/fix", "/report"] {
-            assert!(!names.contains(&gone), "{gone} 应当已经删掉");
+        // /scan 现在真的能扫了；/fix 和 /report 还没有实现，不列出来误导人
+        assert!(names.contains(&"/scan"), "扫描已经能跑，命令该回到列表里");
+        for gone in ["/fix", "/report"] {
+            assert!(!names.contains(&gone), "{gone} 还没实现，不该出现");
         }
         assert!(names.contains(&"/mode"));
     }

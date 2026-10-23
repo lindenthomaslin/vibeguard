@@ -12,6 +12,7 @@ mod mode;
 mod prompt;
 mod repl;
 mod review;
+mod scan;
 mod scan_ui;
 mod sessions;
 mod theme;
@@ -20,8 +21,6 @@ mod tools;
 mod tui;
 mod ui;
 mod vuln_checklist;
-mod vuln_scanner;
-mod scan_session;
 
 use anyhow::Result;
 use app::{App, Overrides};

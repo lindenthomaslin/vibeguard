@@ -1,0 +1,412 @@
+# id	severity	category	title	detect	fix	cwe
+# 由 vibe-coding-漏洞全量清单.md 生成，请勿手改；改源文件后重新生成。
+AUTH-01	critical	A. 认证与账号	接口未挂鉴权中间件，匿名即可访问	无 token 遍历全部端点，逐个核对是否经过鉴权	网关统一拦截，白名单显式声明	CWE-306
+AUTH-02	critical	A. 认证与账号	硬编码后门账号或万能密码	搜索 admin/test/backdoor 常量与特殊分支	删除后门，凭据入库并哈希	CWE-798
+AUTH-03	critical	A. 认证与账号	默认口令未强制修改（admin/admin）	检查初始化脚本与种子数据	首登强制改密，禁用默认账号	CWE-1392
+AUTH-04	critical	A. 认证与账号	密码明文落库	查看用户表结构与写入逻辑	改 Argon2id/bcrypt 并迁移存量	CWE-256
+AUTH-05	high	A. 认证与账号	弱哈希且无盐（MD5/SHA1）	搜索 md5( sha1( 调用点	换 Argon2id，每用户随机盐	CWE-916
+AUTH-06	medium	A. 认证与账号	无密码强度与长度校验	注册/改密接口提交 123456	服务端校验长度+弱口令库	CWE-521
+AUTH-07	high	A. 认证与账号	登录失败无锁定或渐进延迟	连续 100 次错误密码观察响应	计数+锁定+延迟+验证码	CWE-307
+AUTH-08	medium	A. 认证与账号	用户名或手机号可枚举	对比存在/不存在账号的响应与耗时	统一提示语并恒定耗时	CWE-204
+AUTH-09	high	A. 认证与账号	验证码可无限次尝试	固定验证码连续提交 50 次	一次性+次数限制+绑会话	CWE-307
+AUTH-10	high	A. 认证与账号	验证码不过期、可重放	同一验证码重复使用	TTL 5 分钟，用后即焚	CWE-613
+AUTH-11	critical	A. 认证与账号	验证码在响应中回显	抓注册/登录响应看是否含 code 字段	仅服务端保存，绝不回显	CWE-200
+AUTH-12	critical	A. 认证与账号	找回密码 token 可预测或不过期	连续请求观察 token 规律与有效期	高熵随机+短 TTL+单次使用	CWE-640
+AUTH-13	high	A. 认证与账号	重置密码不校验旧密码	已登录态直接调用改密接口	要求旧密码或二次验证	CWE-620
+AUTH-14	medium	A. 认证与账号	注册接口无频率与图形验证	脚本批量注册观察成功率	限流+验证码+手机验证	CWE-799
+AUTH-15	medium	A. 认证与账号	邮箱未验证即可使用全部功能	注册后不验证直接调核心接口	关键操作强制验证邮箱	CWE-302
+AUTH-16	high	A. 认证与账号	OAuth state 未校验	篡改或删除 state 观察是否通过	state 绑定会话并强校验	CWE-352
+AUTH-17	critical	A. 认证与账号	OAuth redirect_uri 未做白名单	改成任意外域看是否跳转并带 code	精确白名单匹配，禁止通配	CWE-601
+AUTH-18	medium	A. 认证与账号	OAuth 缺 PKCE 或使用隐式流	检查授权请求参数	授权码模式+PKCE	CWE-522
+AUTH-19	high	A. 认证与账号	第三方账号绑定不校验归属	用他人 openid 直接绑定	绑定前验证已登录身份	CWE-287
+AUTH-20	medium	A. 认证与账号	记住我 token 永久有效	检查 token 是否含过期时间	设 TTL 并定期轮换	CWE-613
+AUTH-21	high	A. 认证与账号	MFA 可被跳过（直接调后续接口）	跳过二次验证直接访问受保护资源	服务端记录 MFA 完成态	CWE-287
+AUTH-22	low	A. 认证与账号	设备信任永久有效	检查设备 token 有效期	定期失效，可远程撤销	CWE-613
+AUTH-23	medium	A. 认证与账号	登出仅清前端，服务端会话仍有效	登出后重放旧 token	服务端吊销会话	CWE-613
+AUTH-24	high	A. 认证与账号	认证逻辑放在前端路由守卫	直接请求接口绕过页面	服务端强制校验	CWE-602
+AUTHZ-01	critical	B. 授权与越权	IDOR：改 id 可读他人资源	用 A 账号 token 访问 B 的资源 id	每条查询带 owner 条件	CWE-639
+AUTHZ-02	critical	B. 授权与越权	垂直越权：普通用户调管理接口	低权账号请求 admin 端点	路由级角色校验	CWE-285
+AUTHZ-03	high	B. 授权与越权	批量接口未逐条鉴权	批量请求中混入他人 id	逐条校验，任一失败整体拒绝	CWE-639
+AUTHZ-04	high	B. 授权与越权	GraphQL 字段级越权	查询他人对象的敏感字段	字段级 resolver 鉴权	CWE-639
+AUTHZ-05	critical	B. 授权与越权	多租户查询缺 tenant_id	跨租户访问同 id 资源	全局作用域强制注入租户	CWE-639
+AUTHZ-06	critical	B. 授权与越权	权限判断用前端传入的 role	请求体加 role=admin	角色只从服务端会话取	CWE-602
+AUTHZ-07	medium	B. 授权与越权	无统一权限矩阵，角色判断散落各处	搜索散落的 if role == 判断	集中式 RBAC/ABAC 策略	CWE-732
+AUTHZ-08	high	B. 授权与越权	文件下载可越权（直接对象引用）	替换文件 id 下载	下载前校验归属	CWE-639
+AUTHZ-09	high	B. 授权与越权	导出/报表接口无权限校验	低权账号调用导出	单独鉴权+行级过滤	CWE-285
+AUTHZ-10	critical	B. 授权与越权	内部接口无鉴权（/internal /debug /actuator）	扫描常见内部路径	内网隔离+独立鉴权	CWE-306
+AUTHZ-11	high	B. 授权与越权	管理后台共用弱鉴权	尝试默认路径与弱口令登录	独立强鉴权+IP 白名单	CWE-306
+AUTHZ-12	medium	B. 授权与越权	分享链接永久有效且可枚举	遍历分享码	高熵码+有效期+可撤销	CWE-639
+AUTHZ-13	medium	B. 授权与越权	权限变更不即时生效（缓存）	降权后立即访问受限资源	权限缓存短 TTL 或主动失效	CWE-613
+AUTHZ-14	medium	B. 授权与越权	软删除数据仍可访问	删除后直接请求详情接口	查询统一过滤 deleted_at	CWE-639
+AUTHZ-15	high	B. 授权与越权	旧版本 API 绕过新鉴权	用 /v1 访问已修复的 /v2 逻辑	下线旧版本，统一入口	CWE-285
+AUTHZ-16	high	B. 授权与越权	仅列表接口校验，详情接口缺失	直接请求详情端点	所有入口统一守卫	CWE-639
+AUTHZ-17	critical	B. 授权与越权	更新接口未校验 owner	改他人资料的 id	UPDATE 语句带 owner 条件	CWE-639
+AUTHZ-18	high	B. 授权与越权	服务间调用无身份认证	直接调用内部服务端口	mTLS 或服务令牌	CWE-306
+AUTHZ-19	medium	B. 授权与越权	用功能开关代替权限控制	改前端开关值后访问	开关不等于授权，服务端另校验	CWE-285
+SESS-01	critical	C. 会话与令牌	JWT 不验签	修改 payload 后不重签直接请求	强制验签，失败即拒	CWE-347
+SESS-02	critical	C. 会话与令牌	接受 alg=none	把 header 的 alg 改为 none	固定算法白名单	CWE-347
+SESS-03	critical	C. 会话与令牌	JWT 密钥弱或硬编码	检查签名密钥来源与长度	强随机密钥+密钥管理服务	CWE-798
+SESS-04	high	C. 会话与令牌	不校验 exp / nbf	使用已过期 token 请求	校验时间声明	CWE-613
+SESS-05	medium	C. 会话与令牌	不校验 iss / aud	用其他系统签发的 token	校验签发方与受众	CWE-345
+SESS-06	medium	C. 会话与令牌	权限写进 JWT 且长期有效	降权后旧 token 仍带旧权限	短 TTL+服务端二次校验	CWE-613
+SESS-07	high	C. 会话与令牌	token 存 localStorage	检查前端存储位置	改 HttpOnly Cookie	CWE-522
+SESS-08	high	C. 会话与令牌	token 出现在 URL、日志或 Referer	抓包与日志检索	仅通过 Header 传递	CWE-598
+SESS-09	high	C. 会话与令牌	刷新令牌不轮换或永不过期	重复使用旧 refresh token	一次性轮换+复用检测	CWE-613
+SESS-10	medium	C. 会话与令牌	注销不吊销服务端会话	登出后重放旧 token	服务端黑名单或版本号	CWE-613
+SESS-11	high	C. 会话与令牌	会话固定（Session Fixation）	登录前后 session id 是否不变	登录成功重建会话	CWE-384
+SESS-12	medium	C. 会话与令牌	Cookie 缺 HttpOnly/Secure/SameSite	检查 Set-Cookie 响应头	三项全开	CWE-1004
+SESS-13	high	C. 会话与令牌	会话 ID 可预测	采样多个 session id 找规律	CSPRNG 生成	CWE-330
+SESS-14	low	C. 会话与令牌	并发会话无数量限制	多端同时登录	限制数量，踢掉最旧	CWE-613
+SESS-15	high	C. 会话与令牌	改密后旧会话不失效	改密后用旧 token 请求	会话版本号失效全部	CWE-613
+SESS-16	high	C. 会话与令牌	CSRF token 可复用或不校验	删除或复用 token 后提交	每请求一次性+服务端校验	CWE-352
+SESS-17	medium	C. 会话与令牌	双提交 Cookie 实现错误	同时篡改 cookie 与 header	正确比对并加签名	CWE-352
+SESS-18	medium	C. 会话与令牌	Cookie 作用域过宽（父域）	从子域读取主域 cookie	精确设置 Domain	CWE-1275
+INJ-01	critical	D. 注入类	SQL 字符串拼接	传 ' OR 1=1--	全部改参数化查询	CWE-89
+INJ-02	critical	D. 注入类	ORM raw / where 拼接	检查 raw/extra/where 的字符串用法	使用绑定参数	CWE-89
+INJ-03	high	D. 注入类	动态 ORDER BY 或列名注入	传 sort=id,(select ...)	字段白名单映射	CWE-89
+INJ-04	medium	D. 注入类	LIKE 通配符未转义	传 % 与 _ 观察匹配范围	转义通配符	CWE-89
+INJ-05	high	D. 注入类	二次注入（存储后再拼接）	先存恶意串再触发查询	全链路参数化	CWE-89
+INJ-06	high	D. 注入类	盲注可被利用	时间盲注与布尔盲注探测	同 SQL 注入修复	CWE-89
+INJ-07	critical	D. 注入类	NoSQL 操作符注入	传 {"$ne":null} 绕过登录	类型强校验+操作符白名单	CWE-943
+INJ-08	critical	D. 注入类	命令注入（exec/spawn 拼接）	传 ;id 或 $(id)	数组参数，禁用 shell 解析	CWE-78
+INJ-09	critical	D. 注入类	shell=True 或字符串命令	搜索 shell=True	改 execFile / 参数数组	CWE-78
+INJ-10	critical	D. 注入类	SSTI 模板注入	传 {{7*7}} 观察是否求值	沙箱模板，不渲染用户串	CWE-1336
+INJ-11	high	D. 注入类	LDAP 注入	传 *)(uid=*	转义特殊字符+参数化	CWE-90
+INJ-12	medium	D. 注入类	XPath 注入	传 ' or '1'='1	预编译 XPath	CWE-643
+INJ-13	high	D. 注入类	反射型 XSS	参数回显 <script>alert(1)</script>	按上下文输出编码	CWE-79
+INJ-14	critical	D. 注入类	存储型 XSS	提交脚本后他人访问触发	编码+富文本净化	CWE-79
+INJ-15	high	D. 注入类	DOM XSS	检查 location/hash 写入危险 sink	避免危险 sink，用 textContent	CWE-79
+INJ-16	high	D. 注入类	innerHTML / dangerouslySetInnerHTML	全局搜索危险 API	改 textContent 或先净化	CWE-79
+INJ-17	high	D. 注入类	富文本白名单缺失	提交 img onerror	DOMPurify 严格白名单	CWE-79
+INJ-18	medium	D. 注入类	SVG/HTML 上传导致 XSS	上传内嵌脚本的 SVG	强制下载头或独立域	CWE-79
+INJ-19	high	D. 注入类	Markdown 渲染未净化	提交 <img onerror>	渲染前净化	CWE-79
+INJ-20	low	D. 注入类	日志注入（CRLF）	输入含换行伪造日志行	转义换行与控制字符	CWE-117
+INJ-21	high	D. 注入类	HTTP 响应头注入	参数含 %0d%0a	过滤 CRLF，禁止用户控制头	CWE-113
+INJ-22	medium	D. 注入类	邮件头注入	收件人字段含换行	校验并过滤	CWE-93
+INJ-23	medium	D. 注入类	CSV/Excel 公式注入	单元格填 =cmd|'/c calc'	前缀单引号转义	CWE-1236
+INJ-24	high	D. 注入类	原型链污染	传 __proto__ 或 constructor	过滤键名，用 Object.create(null)	CWE-1321
+INJ-25	medium	D. 注入类	正则 ReDoS	超长输入测响应时间	限制长度，改写非回溯正则	CWE-1333
+INJ-26	medium	D. 注入类	客户端模板表达式注入	用户串进入模板编译	不编译用户输入	CWE-1336
+INJ-27	critical	D. 注入类	eval / new Function 代码注入	搜索 eval 与动态执行	移除动态执行	CWE-95
+INJ-28	critical	D. 注入类	反序列化（pickle/yaml/Java/PHP）	传恶意序列化串	改 JSON+类型白名单	CWE-502
+INJ-29	high	D. 注入类	XXE 外部实体	上传含 DOCTYPE 的 XML	禁用外部实体与 DTD	CWE-611
+INJ-30	critical	D. 注入类	服务端表达式注入（EL/OGNL/SpEL）	传 ${7*7}	不解析用户表达式	CWE-917
+INPUT-01	high	E. 输入验证与数据处理	仅前端校验，服务端无校验	绕过前端直接调接口	服务端为唯一可信校验	CWE-602
+INPUT-02	medium	E. 输入验证与数据处理	类型混淆（字符串当数字）	传 1e999 / 0x10 / 数组	严格类型转换	CWE-704
+INPUT-03	medium	E. 输入验证与数据处理	整数溢出或负数	传 -1 / 2147483648	范围校验	CWE-190
+INPUT-04	medium	E. 输入验证与数据处理	超长输入无上限	传 10MB 字符串	长度与体积限制	CWE-770
+INPUT-05	high	E. 输入验证与数据处理	HTTP 参数污染（HPP）	同名参数传两次不同值	统一取首或取末并规范化	CWE-235
+INPUT-06	critical	E. 输入验证与数据处理	Mass Assignment	请求体加 isAdmin=true	DTO 白名单绑定	CWE-915
+INPUT-07	critical	E. 输入验证与数据处理	多余字段写入敏感列	同上，观察落库结果	字段级白名单	CWE-915
+INPUT-08	medium	E. 输入验证与数据处理	Unicode 规范化绕过	用全角或变体字符绕过过滤	先规范化再校验	CWE-176
+INPUT-09	medium	E. 输入验证与数据处理	大小写或空格绕过黑名单	传 <ScRiPt>	改用白名单	CWE-178
+INPUT-10	medium	E. 输入验证与数据处理	空字节截断	传 a.php%00.jpg	拒绝空字节	CWE-158
+INPUT-11	medium	E. 输入验证与数据处理	JSON 深度嵌套 DoS	传一万层嵌套	限制解析深度	CWE-400
+INPUT-12	medium	E. 输入验证与数据处理	XML 炸弹（实体膨胀）	传实体递归膨胀 XML	限制实体与总大小	CWE-776
+INPUT-13	medium	E. 输入验证与数据处理	通配符滥用导致全表查询	传 * 或空条件	强制至少一个有效条件	CWE-943
+INPUT-14	low	E. 输入验证与数据处理	日期解析歧义	传 2026-13-45 / 0000-00-00	严格格式与范围	CWE-20
+INPUT-15	medium	E. 输入验证与数据处理	浮点金额精度错误	0.1+0.2 参与结算	用整数分或 Decimal	CWE-681
+INPUT-16	low	E. 输入验证与数据处理	编码不一致（UTF-8/GBK）	传 GBK 字节	统一 UTF-8 并拒绝非法字节	CWE-838
+INPUT-17	medium	E. 输入验证与数据处理	前后端校验规则不一致	对比两端规则差异	单一校验源，后端为准	CWE-20
+INPUT-18	medium	E. 输入验证与数据处理	用黑名单而非白名单	构造未列出的变体	白名单枚举	CWE-184
+INPUT-19	medium	E. 输入验证与数据处理	枚举值未限制	传未定义 status	枚举校验	CWE-20
+INPUT-20	medium	E. 输入验证与数据处理	分页参数无上限	limit=999999	上限 100，超出拒绝	CWE-770
+FILE-01	high	F. 文件与上传	仅校验扩展名	改后缀为 .jpg 上传 webshell	魔数+扩展名双校验	CWE-434
+FILE-02	high	F. 文件与上传	不校验 MIME 与文件头	篡改 Content-Type	读取文件头判定真实类型	CWE-434
+FILE-03	critical	F. 文件与上传	存入 Web 可执行目录	上传 .php 后直接访问	存对象存储或非执行目录	CWE-434
+FILE-04	high	F. 文件与上传	文件名路径穿越	文件名传 ../../x	重命名为 UUID	CWE-22
+FILE-05	medium	F. 文件与上传	同名文件覆盖	上传同名文件覆盖他人	UUID+版本号	CWE-73
+FILE-06	medium	F. 文件与上传	无文件大小限制	传 5GB 文件	服务端硬性上限	CWE-770
+FILE-07	medium	F. 文件与上传	无上传频率限制	脚本连续上传	限流+配额	CWE-770
+FILE-08	medium	F. 文件与上传	图片未二次渲染（图片马）	图片尾部附加脚本	重编码后再存储	CWE-434
+FILE-09	high	F. 文件与上传	ZIP 解压路径穿越	压缩包内含 ../../ 路径	校验解压后绝对路径	CWE-22
+FILE-10	medium	F. 文件与上传	ZIP 炸弹	42.zip 类高压缩比文件	限制解压比与总量	CWE-409
+FILE-11	low	F. 文件与上传	无病毒扫描	上传 EICAR 测试文件	接入杀毒或沙箱	CWE-434
+FILE-12	low	F. 文件与上传	临时文件未清理	观察 /tmp 残留	定时清理+生命周期策略	CWE-459
+FILE-13	critical	F. 文件与上传	直传对象存储权限错误	直接访问他人文件 URL	私有桶+签名 URL	CWE-732
+FILE-14	high	F. 文件与上传	预签名 URL 权限过大或有效期过长	用签名 URL 覆盖他人对象	最小权限+短时效	CWE-732
+FILE-15	high	F. 文件与上传	下载接口 IDOR	替换 fileId 下载	校验文件归属	CWE-639
+FILE-16	medium	F. 文件与上传	文件名回显导致 XSS	文件名含 <script>	输出编码	CWE-79
+NET-01	critical	G. 网络与传输层	SSRF 可请求任意 URL	传 http://127.0.0.1:22	域名白名单+禁止内网段	CWE-918
+NET-02	high	G. 网络与传输层	SSRF 绕过（十进制 IP/短域名/DNS rebinding）	用 2130706433 代替 127.0.0.1	解析后校验真实 IP	CWE-918
+NET-03	critical	G. 网络与传输层	可访问云元数据服务	传 169.254.169.254	强制 IMDSv2+出网限制	CWE-918
+NET-04	medium	G. 网络与传输层	开放重定向	传 next=//evil.com	仅允许相对路径或白名单域	CWE-601
+NET-05	high	G. 网络与传输层	HTTP 请求走私	构造 CL 与 TE 冲突的请求	统一网关规范化头部	CWE-444
+NET-06	high	G. 网络与传输层	Host 头注入（重置链接投毒）	改 Host 触发重置邮件	固定域名配置，不信任 Host	CWE-644
+NET-07	high	G. 网络与传输层	CORS 允许任意源	带 Origin 请求观察回显	白名单精确匹配	CWE-942
+NET-08	high	G. 网络与传输层	CORS 动态回显 Origin	伪造 Origin 观察是否被回显	不反射未授权来源	CWE-942
+NET-09	medium	G. 网络与传输层	缺少 CSP	检查响应头	配置严格 CSP	CWE-693
+NET-10	medium	G. 网络与传输层	缺少 HSTS / X-Frame-Options / X-Content-Type-Options	检查响应头	补齐全部安全头	CWE-693
+NET-11	medium	G. 网络与传输层	点击劫持	用 iframe 嵌套页面	frame-ancestors 限制	CWE-1021
+NET-12	low	G. 网络与传输层	混合内容	页面内含 http 资源	全站 HTTPS	CWE-311
+NET-13	high	G. 网络与传输层	关闭证书校验	搜索 verify=False / rejectUnauthorized:false	恢复校验并正确配置 CA	CWE-295
+NET-14	medium	G. 网络与传输层	弱 TLS 版本或弱套件	扫描是否支持 TLS1.0	仅允许 TLS1.2+	CWE-326
+NET-15	high	G. 网络与传输层	敏感数据走明文 HTTP	抓包查看	强制 HTTPS 并 HSTS	CWE-319
+NET-16	high	G. 网络与传输层	WebSocket 无鉴权或无 Origin 校验	未登录直接建立连接	握手阶段鉴权+校验 Origin	CWE-306
+NET-17	medium	G. 网络与传输层	WebSocket 消息无频率限制	高频推送消息	消息级限流	CWE-770
+NET-18	high	G. 网络与传输层	无条件信任 X-Forwarded-For	伪造 XFF 绕过限流	只信可信代理链	CWE-348
+NET-19	high	G. 网络与传输层	缓存投毒	注入未转义头影响缓存内容	缓存键规范化+头部过滤	CWE-525
+NET-20	high	G. 网络与传输层	CDN 缓存了敏感响应	共享缓存命中个人数据	Cache-Control: private/no-store	CWE-525
+API-01	high	H. API 接口层（含速率限制）	全站无速率限制	单 IP 每秒 1000 请求	网关级全局限流	CWE-770
+API-02	critical	H. API 接口层（含速率限制）	登录接口无限流，可撞库	字典爆破观察是否被拦	账号+IP 双维度限流	CWE-307
+API-03	high	H. API 接口层（含速率限制）	短信/邮件发送无限制，可轰炸与刷成本	循环触发发送	手机号+IP+设备三维限流	CWE-770
+API-04	high	H. API 接口层（含速率限制）	注册/邀请无限制，可薅羊毛	批量注册领取奖励	限流+风控+设备指纹	CWE-770
+API-05	medium	H. API 接口层（含速率限制）	仅按 IP 限流，可代理池绕过	轮换代理继续请求	叠加账号与设备维度	CWE-770
+API-06	medium	H. API 接口层（含速率限制）	仅按 IP 不限账号，单账号可高频	单 token 高频请求	增加用户维度限流	CWE-770
+API-07	medium	H. API 接口层（含速率限制）	限流阈值不合理（误伤或过松）	压测正常业务流量	分级阈值+监控调优	CWE-770
+API-08	high	H. API 接口层（含速率限制）	限流仅在前端实现	直接请求接口	服务端或网关实现	CWE-770
+API-09	medium	H. API 接口层（含速率限制）	多实例各自计数导致限流失效	请求打到不同实例	Redis 集中计数	CWE-770
+API-10	low	H. API 接口层（含速率限制）	限流无 429 与 Retry-After	观察被限流时的响应	标准状态码与响应头	CWE-770
+API-11	high	H. API 接口层（含速率限制）	敏感操作无二次验证	直接调用改密/转账接口	二次确认+OTP	CWE-620
+API-12	high	H. API 接口层（含速率限制）	无幂等键导致重复支付/重复提交	并发发送相同请求	Idempotency-Key+唯一约束	CWE-837
+API-13	medium	H. API 接口层（含速率限制）	无请求体大小限制	传 100MB JSON	限制 1MB 并提前拒绝	CWE-770
+API-14	medium	H. API 接口层（含速率限制）	无请求超时设置	慢请求挂住连接	全链路超时	CWE-1088
+API-15	medium	H. API 接口层（含速率限制）	无并发限制导致连接池耗尽	并发压测	信号量+池上限	CWE-770
+API-16	medium	H. API 接口层（含速率限制）	批量接口无条数上限	一次提交 10 万条	上限 100，超出拒绝	CWE-770
+API-17	medium	H. API 接口层（含速率限制）	分页无上限或深分页性能崩塌	page=100000	游标分页+最大页数	CWE-770
+API-18	high	H. API 接口层（含速率限制）	排序/过滤参数可注入	sort= 注入子查询	字段白名单映射	CWE-89
+API-19	medium	H. API 接口层（含速率限制）	错误响应泄露堆栈、SQL 或内部路径	触发 500 观察响应	统一错误码+脱敏	CWE-209
+API-20	low	H. API 接口层（含速率限制）	错误码不统一，前端靠 message 判断	检查错误响应结构	统一错误契约	CWE-703
+API-21	high	H. API 接口层（含速率限制）	成功响应返回多余字段（哈希/token/内部 ID）	抓包查看响应体	DTO 序列化白名单	CWE-200
+API-22	medium	H. API 接口层（含速率限制）	错误信息导致用户枚举	登录错误区分账号不存在	统一提示语	CWE-204
+API-23	medium	H. API 接口层（含速率限制）	无 API 版本策略，旧版本不弃用	探测 /v1 是否仍可用	版本化+下线计划	CWE-1059
+API-24	high	H. API 接口层（含速率限制）	调试端点暴露（swagger/actuator/debug）	扫描常见调试路径	生产环境关闭	CWE-489
+API-25	high	H. API 接口层（含速率限制）	GraphQL 无深度与复杂度限制	构造深层嵌套查询	深度+复杂度上限	CWE-770
+API-26	medium	H. API 接口层（含速率限制）	GraphQL introspection 生产开放	执行 __schema 查询	生产关闭内省	CWE-200
+API-27	medium	H. API 接口层（含速率限制）	GraphQL 批量查询绕过限流	单请求内多操作	按操作数计数	CWE-770
+API-28	medium	H. API 接口层（含速率限制）	REST 方法误用（GET 有副作用）	GET 触发删除或扣款	严格遵循方法语义	CWE-650
+API-29	medium	H. API 接口层（含速率限制）	未校验 Content-Type	用表单提交 JSON 接口	严格匹配并拒绝异常类型	CWE-436
+API-30	medium	H. API 接口层（含速率限制）	支持 HTTP 方法覆盖头	加 X-HTTP-Method-Override	禁用方法覆盖	CWE-650
+API-31	high	H. API 接口层（含速率限制）	参数污染导致鉴权绕过	同名参数传不同值	规范化解析，鉴权与业务取同一份	CWE-235
+API-32	medium	H. API 接口层（含速率限制）	接口返回全量数据（过度暴露）	观察列表接口字段	按场景裁剪返回	CWE-213
+API-33	low	H. API 接口层（含速率限制）	无请求 ID，故障无法追踪	检查响应头	全链路 traceId	CWE-778
+API-34	high	H. API 接口层（含速率限制）	开放接口无签名与防重放	原样重放请求	签名+nonce+时间窗	CWE-345
+API-35	high	H. API 接口层（含速率限制）	开放 API 无配额与租户隔离	单 key 打满配额	配额+租户隔离	CWE-770
+API-36	high	H. API 接口层（含速率限制）	Webhook 无签名校验	伪造回调请求	HMAC 验签+时间窗	CWE-345
+API-37	high	H. API 接口层（含速率限制）	Webhook 回调地址未校验导致 SSRF	填写内网地址	白名单+禁止内网	CWE-918
+API-38	medium	H. API 接口层（含速率限制）	长轮询/SSE 连接无上限	建立上万条连接	连接数限制	CWE-770
+API-39	low	H. API 接口层（含速率限制）	文件流式下载无限速	多线程拖库	限速+鉴权	CWE-770
+API-40	low	H. API 接口层（含速率限制）	健康检查泄露依赖与版本	访问 /health	只返回 up/down	CWE-200
+API-41	low	H. API 接口层（含速率限制）	OPTIONS 泄露内部方法	发送 OPTIONS 请求	收敛 Allow 头	CWE-200
+API-42	medium	H. API 接口层（含速率限制）	字段数量与嵌套无限制（DoS）	传十万个字段	限制键数量与深度	CWE-770
+API-43	medium	H. API 接口层（含速率限制）	无 Bot 与爬虫防护	脚本抓取全量数据	风控+行为分析	CWE-799
+API-44	medium	H. API 接口层（含速率限制）	短链或分享码可枚举	遍历短码	高熵码+限流	CWE-639
+API-45	medium	H. API 接口层（含速率限制）	回调/跳转 URL 未校验（开放跳转）	传外域地址	域名白名单	CWE-601
+CRYPTO-01	high	I. 密码学实现	自研加密算法	审查加密实现是否标准库	改用标准算法与库	CWE-327
+CRYPTO-02	high	I. 密码学实现	AES-ECB 模式	搜索 ECB 关键字	改 GCM 或 CBC+HMAC	CWE-327
+CRYPTO-03	high	I. 密码学实现	固定或可预测 IV	检查 IV 来源与复用情况	随机 IV 随密文传输	CWE-329
+CRYPTO-04	critical	I. 密码学实现	密钥硬编码	搜索 key= 常量	KMS 或环境变量	CWE-321
+CRYPTO-05	high	I. 密码学实现	密钥与密文同库存放	检查表结构	分离存储，权限隔离	CWE-312
+CRYPTO-06	medium	I. 密码学实现	无密钥轮换机制	检查是否存在密钥版本	密钥版本化+定期轮换	CWE-320
+CRYPTO-07	high	I. 密码学实现	弱随机数生成 token	搜索 Math.random / rand()	改用 CSPRNG	CWE-338
+CRYPTO-08	critical	I. 密码学实现	密码用可逆加密存储	检查是否存在解密函数	改单向哈希	CWE-257
+CRYPTO-09	high	I. 密码学实现	无盐或固定盐	检查哈希参数	每用户随机盐	CWE-759
+CRYPTO-10	medium	I. 密码学实现	哈希迭代次数过低	检查 bcrypt cost	cost≥12 或 Argon2id	CWE-916
+CRYPTO-11	high	I. 密码学实现	密码明文传输	抓包	HTTPS，且前端不落日志	CWE-319
+CRYPTO-12	high	I. 密码学实现	敏感字段未加密落库	检查身份证/银行卡列	字段级加密	CWE-311
+CRYPTO-13	medium	I. 密码学实现	日志打印敏感字段	检索日志内容	统一脱敏中间件	CWE-532
+CRYPTO-14	high	I. 密码学实现	签名算法可降级	尝试弱算法是否被接受	固定算法白名单	CWE-757
+CRYPTO-15	high	I. 密码学实现	时间戳与 nonce 未校验导致重放	原样重放请求	时间窗+nonce 缓存	CWE-294
+CRYPTO-16	high	I. 密码学实现	加密不认证（无 MAC/AEAD）	篡改密文观察是否报错	使用 AEAD（GCM）	CWE-353
+CRYPTO-17	medium	I. 密码学实现	填充 oracle	观察解密错误差异	统一错误响应	CWE-209
+CRYPTO-18	medium	I. 密码学实现	密钥长度不足	检查密钥长度	≥256 bit	CWE-326
+CRYPTO-19	high	I. 密码学实现	测试密钥进入生产	对比各环境配置	环境隔离+启动校验	CWE-321
+CRYPTO-20	medium	I. 密码学实现	IV 与密钥一起明文存储	检查存储位置	分离存储	CWE-329
+CONF-01	critical	J. 密钥与配置	代码中硬编码密钥	正则扫描 AK/sk/token/password	接入 secret manager	CWE-798
+CONF-02	critical	J. 密钥与配置	.env 提交到仓库	检查 git 历史与仓库文件	.gitignore+立即轮换	CWE-540
+CONF-03	critical	J. 密钥与配置	前端 bundle 含密钥	搜索 dist 产物中的密钥特征	改后端代理调用	CWE-540
+CONF-04	critical	J. 密钥与配置	service_role 或私钥下发到客户端	检查前端初始化代码	仅用匿名 key+开启 RLS	CWE-798
+CONF-05	high	J. 密钥与配置	Git 历史泄露密钥（文件已删）	git log -p 全历史扫描	轮换密钥+清理历史	CWE-540
+CONF-06	medium	J. 密钥与配置	日志或异常上报含密钥	检查 Sentry 事件内容	上报前脱敏	CWE-532
+CONF-07	high	J. 密钥与配置	CI 变量对 fork PR 可见	fork PR 中打印环境变量	隔离 secret 与权限	CWE-522
+CONF-08	high	J. 密钥与配置	DEBUG 模式上线	触发异常看是否显示堆栈	生产强制关闭	CWE-489
+CONF-09	medium	J. 密钥与配置	详细堆栈回显给用户	触发 500	统一错误页	CWE-209
+CONF-10	medium	J. 密钥与配置	目录列表开启	访问静态目录	关闭 autoindex	CWE-548
+CONF-11	medium	J. 密钥与配置	默认管理路径可访问	扫 /admin /console /manager	改路径+强鉴权	CWE-1188
+CONF-12	critical	J. 密钥与配置	数据库公网暴露	端口扫描 3306/5432	内网+IP 白名单	CWE-284
+CONF-13	critical	J. 密钥与配置	数据库弱口令或无口令	尝试空密码与常见口令	强口令+IAM 认证	CWE-521
+CONF-14	critical	J. 密钥与配置	Redis/MQ 无认证	直连 6379 执行 INFO	requirepass+内网	CWE-306
+CONF-15	critical	J. 密钥与配置	对象存储公开读写	匿名 PUT 一个文件	私有桶+最小策略	CWE-732
+CONF-16	high	J. 密钥与配置	云 IAM 权限过大（*）	检查策略文档	最小权限拆分	CWE-732
+CONF-17	medium	J. 密钥与配置	长期 AK 未轮换	检查凭证创建时间	改用临时凭证	CWE-798
+CONF-18	medium	J. 密钥与配置	容器以 root 运行	检查 Dockerfile 的 USER	非 root 用户运行	CWE-250
+CONF-19	high	J. 密钥与配置	容器 privileged 或挂载 docker.sock	检查 compose/部署清单	移除特权与危险挂载	CWE-250
+CONF-20	high	J. 密钥与配置	K8s dashboard 或 etcd 暴露	扫 8001/2379	内网+RBAC	CWE-306
+CONF-21	high	J. 密钥与配置	安全组 0.0.0.0/0 全开	检查入站规则	最小开放	CWE-284
+CONF-22	high	J. 密钥与配置	备份文件可下载（.bak/.git/.DS_Store）	扫常见备份后缀	禁止 Web 访问	CWE-538
+CONF-23	medium	J. 密钥与配置	sourcemap 上线	访问 .map 文件	生产关闭或私有上传	CWE-540
+CONF-24	medium	J. 密钥与配置	环境变量可覆盖关键配置	注入 ENV 改变行为	启动时校验配置 schema	CWE-15
+CONF-25	medium	J. 密钥与配置	配置无 schema 校验，错配静默生效	故意改错配置观察	启动即校验并 fail fast	CWE-1188
+BIZ-01	critical	K. 业务逻辑	价格或金额由前端传入	改 price=0.01 下单	服务端定价，前端仅展示	CWE-602
+BIZ-02	high	K. 业务逻辑	折扣与优惠券可叠加	叠加多张券	互斥规则+服务端计算	CWE-840
+BIZ-03	high	K. 业务逻辑	负数金额或数量	传 quantity=-1	正数校验+上下限	CWE-1284
+BIZ-04	high	K. 业务逻辑	库存超卖	并发下单同一商品	原子扣减+乐观锁	CWE-362
+BIZ-05	high	K. 业务逻辑	重复下单	并发提交同一订单	幂等键+唯一约束	CWE-837
+BIZ-06	critical	K. 业务逻辑	支付金额与订单金额不一致	篡改支付参数	服务端比对后再发起支付	CWE-602
+BIZ-07	critical	K. 业务逻辑	支付回调无签名校验	伪造支付成功回调	验签+校验金额与订单	CWE-345
+BIZ-08	high	K. 业务逻辑	支付回调可重放	重放通知	幂等+通知去重	CWE-294
+BIZ-09	high	K. 业务逻辑	订单状态机可跳跃	未支付直接置为已发货	服务端状态机校验	CWE-841
+BIZ-10	high	K. 业务逻辑	退款超额或多次退款	重复调用退款	累计校验+幂等	CWE-840
+BIZ-11	high	K. 业务逻辑	提现无风控	异常金额与频率提现	风控规则+人工审核	CWE-840
+BIZ-12	high	K. 业务逻辑	积分/余额并发扣减	并发消费同一余额	行锁或原子操作	CWE-362
+BIZ-13	medium	K. 业务逻辑	试用与免费额度可重置	反复注销重注册	绑定实名/设备/支付	CWE-840
+BIZ-14	medium	K. 业务逻辑	邀请奖励可自邀	自己邀请自己	设备与支付校验	CWE-840
+BIZ-15	medium	K. 业务逻辑	优惠券可枚举领取	遍历券码	高熵码+限领	CWE-639
+BIZ-16	medium	K. 业务逻辑	秒杀无排队与预热	压测抢购	队列+缓存+限购	CWE-400
+BIZ-17	medium	K. 业务逻辑	抽奖概率可预测	观察随机源与序列	服务端 CSPRNG	CWE-330
+BIZ-18	medium	K. 业务逻辑	限购仅前端限制	直接调接口超量购买	服务端计数	CWE-602
+BIZ-19	medium	K. 业务逻辑	会员权益校验缺失	过期会员继续用权益	每次使用时校验	CWE-285
+BIZ-20	high	K. 业务逻辑	越权取消他人订单	替换 orderId 取消	校验订单归属	CWE-639
+BIZ-21	high	K. 业务逻辑	状态流转缺服务端校验	草稿直接发布	服务端状态机	CWE-841
+BIZ-22	medium	K. 业务逻辑	审批流可自我审批	同一人提交并审批	职责分离	CWE-863
+BIZ-23	medium	K. 业务逻辑	导出无行数与权限限制	导出全量用户	上限+审批+行级过滤	CWE-770
+BIZ-24	low	K. 业务逻辑	批量操作无二次确认	误触批量删除	二次确认+软删	CWE-1288
+BIZ-25	medium	K. 业务逻辑	删除无软删与回收站	删除后不可恢复	软删+保留期	CWE-404
+BIZ-26	medium	K. 业务逻辑	计数字段可被直接修改（点赞数/销量）	直接改 count 字段	服务端计算，禁止客户端写入	CWE-602
+BIZ-27	medium	K. 业务逻辑	时间窗口校验缺失（过期仍可用）	过期券仍能核销	服务端校验有效期	CWE-613
+BIZ-28	medium	K. 业务逻辑	地区或合规限制未校验	伪造地区参数	服务端校验+IP 辅助	CWE-1284
+BIZ-29	low	K. 业务逻辑	免费试用绑卡后自动扣费无提示	走完试用流程	明示条款+确认步骤	CWE-840
+BIZ-30	medium	K. 业务逻辑	前后端优惠计算顺序不一致	对比两端最终金额	单一计算源	CWE-840
+DATA-01	medium	L. 数据与隐私	过度收集个人信息	检查表单字段是否必要	最小必要原则	CWE-359
+DATA-02	medium	L. 数据与隐私	无隐私政策或无同意记录	检查注册流程	明示同意并留痕	CWE-359
+DATA-03	high	L. 数据与隐私	日志记录 PII、密码或 token	检索日志内容	脱敏+字段白名单	CWE-532
+DATA-04	medium	L. 数据与隐私	埋点上报敏感字段	抓埋点请求	白名单字段	CWE-359
+DATA-05	high	L. 数据与隐私	导出接口无脱敏	导出查看手机号是否掩码	掩码+权限控制	CWE-359
+DATA-06	medium	L. 数据与隐私	错误上报含完整请求体	查看 Sentry payload	过滤敏感键	CWE-532
+DATA-07	medium	L. 数据与隐私	无数据删除权实现	请求删除账号观察	级联删除+异步任务	CWE-359
+DATA-08	low	L. 数据与隐私	无数据导出权实现	请求导出个人数据	提供自助导出	CWE-359
+DATA-09	high	L. 数据与隐私	备份含明文敏感数据	检查备份文件内容	加密备份+访问控制	CWE-311
+DATA-10	high	L. 数据与隐私	测试环境使用生产数据	检查种子数据来源	脱敏或合成数据	CWE-359
+DATA-11	high	L. 数据与隐私	敏感字段无加密	查看表结构与值	字段级加密	CWE-311
+DATA-12	medium	L. 数据与隐私	第三方 SDK 回传用户数据	抓包看第三方请求	最小化+协议约束	CWE-359
+DATA-13	medium	L. 数据与隐私	跨境传输未评估	检查数据流向与区域	合规评估+本地化	CWE-359
+DATA-14	low	L. 数据与隐私	无数据保留期限	检查清理任务	定期归档与删除	CWE-359
+DATA-15	low	L. 数据与隐私	自增 ID 暴露业务量	观察 ID 连续性	UUID 或雪花 ID	CWE-200
+DATA-16	high	L. 数据与隐私	响应含他人信息（过度返回）	抓包看关联对象	按权限裁剪	CWE-200
+DATA-17	medium	L. 数据与隐私	缓存或队列残留敏感数据	检查 Redis 键与队列	TTL+加密+清理	CWE-226
+DATA-18	medium	L. 数据与隐私	localStorage 存敏感信息	检查前端存储	移出或加密	CWE-922
+FE-01	high	M. 前端与浏览器	敏感逻辑在前端（算价/风控/权限）	读 JS 找规则与阈值	移到服务端	CWE-602
+FE-02	high	M. 前端与浏览器	前端含内部地址或密钥	搜索 dist 产物	后端代理，不下发凭证	CWE-540
+FE-03	medium	M. 前端与浏览器	缺少 CSP	检查响应头	配置严格 CSP 并上报	CWE-693
+FE-04	medium	M. 前端与浏览器	第三方脚本无 SRI	检查 script 标签	加 integrity 或自托管	CWE-353
+FE-05	high	M. 前端与浏览器	postMessage 不校验 origin	从任意页面发送消息	校验 origin 与 source	CWE-345
+FE-06	low	M. 前端与浏览器	target=_blank 缺 rel=noopener	检查外链写法	补 rel=noopener noreferrer	CWE-1022
+FE-07	medium	M. 前端与浏览器	CDN 依赖无完整性校验	检查引用方式	SRI+自托管关键库	CWE-353
+FE-08	medium	M. 前端与浏览器	前端路由无权限校验	直接访问受限路由	服务端校验，前端仅做体验	CWE-602
+FE-09	low	M. 前端与浏览器	无错误边界导致整页白屏	制造渲染异常	ErrorBoundary+降级 UI	CWE-391
+FE-10	medium	M. 前端与浏览器	表单可重复提交	快速双击提交	按钮禁用+幂等	CWE-837
+FE-11	low	M. 前端与浏览器	自动填充泄露敏感字段	检查 autocomplete	敏感字段关闭自动填充	CWE-522
+FE-12	low	M. 前端与浏览器	过度申请设备权限	检查权限申请时机	按需申请并说明用途	CWE-250
+FE-13	medium	M. 前端与浏览器	URL 参数注入（深链接）	构造参数触发渲染	校验+编码	CWE-79
+FE-14	medium	M. 前端与浏览器	可被任意 iframe 嵌入	第三方页面嵌套	frame-ancestors	CWE-1021
+FE-15	low	M. 前端与浏览器	本地存储无过期机制	检查读写逻辑	加 TTL 与清理	CWE-613
+FE-16	low	M. 前端与浏览器	版本更新后旧缓存导致异常	灰度验证旧客户端	资源版本化+强制刷新	CWE-1059
+FE-17	low	M. 前端与浏览器	前端未做敏感信息遮罩	截图检查	掩码展示	CWE-200
+SUP-01	critical	N. 依赖与供应链	幻觉包名（slopsquatting）	逐个核对依赖是否真实存在且为官方	依赖白名单+人工确认	CWE-1357
+SUP-02	high	N. 依赖与供应链	拼写相似包（typosquatting）	比对包名与官方名称	白名单+来源校验	CWE-1357
+SUP-03	medium	N. 依赖与供应链	引入已废弃的包	查维护状态与最后发布时间	替换为维护中的替代品	CWE-1104
+SUP-04	high	N. 依赖与供应链	恶意 postinstall 脚本	审查 install 脚本内容	禁脚本安装+沙箱	CWE-506
+SUP-05	medium	N. 依赖与供应链	无 lockfile	检查仓库根目录	提交 lockfile 并 CI 校验	CWE-1357
+SUP-06	medium	N. 依赖与供应链	版本范围过宽（^ / ~）	检查 package.json	锁定精确版本	CWE-1357
+SUP-07	low	N. 依赖与供应链	依赖数量膨胀	统计依赖树规模	精简，能自写就自写	CWE-1104
+SUP-08	high	N. 依赖与供应链	未扫描已知 CVE	跑 SCA 工具	CI 集成 SCA 并阻断	CWE-1395
+SUP-09	medium	N. 依赖与供应链	基础镜像 tag=latest	检查 Dockerfile	固定 digest	CWE-1357
+SUP-10	high	N. 依赖与供应链	镜像来源不可信	检查 registry 地址	官方源+镜像签名	CWE-1357
+SUP-11	high	N. 依赖与供应链	构建脚本 curl 远程直接执行	搜索 curl 管道 bash	固定版本+校验哈希	CWE-829
+SUP-12	medium	N. 依赖与供应链	私有源无认证或降级公共源	检查 .npmrc/.pip.conf	强制私有源+认证	CWE-1357
+SUP-13	medium	N. 依赖与供应链	未校验包签名或哈希	检查安装配置	开启完整性校验	CWE-345
+SUP-14	medium	N. 依赖与供应链	传递依赖未审计	深挖依赖树	定期全量审计	CWE-1104
+SUP-15	medium	N. 依赖与供应链	许可证冲突（GPL 污染）	扫描 license 清单	合规审查+替换	—
+SUP-16	medium	N. 依赖与供应链	生成代码照抄受版权保护片段	相似度检测	重写+合规审查	—
+INFRA-01	critical	O. 云与基础设施	管理端口公网暴露	端口扫描	内网或 VPN 访问	CWE-284
+INFRA-02	high	O. 云与基础设施	安全组过宽	检查入站规则	最小开放+分环境	CWE-284
+INFRA-03	medium	O. 云与基础设施	无 WAF	检查前置防护	接入 WAF	CWE-693
+INFRA-04	medium	O. 云与基础设施	无 DDoS 防护	压测观察	云防护+限流	CWE-770
+INFRA-05	high	O. 云与基础设施	对象存储 ACL 错误	匿名访问测试	私有桶+桶策略	CWE-732
+INFRA-06	high	O. 云与基础设施	快照或镜像公开共享	检查共享设置	私有化并审计	CWE-732
+INFRA-07	high	O. 云与基础设施	云函数无鉴权即可触发	直接调用函数 URL	鉴权+签名	CWE-306
+INFRA-08	high	O. 云与基础设施	消息队列无认证	直连测试	认证+内网	CWE-306
+INFRA-09	medium	O. 云与基础设施	定时任务可被外部触发	调用触发端点	鉴权+内网	CWE-306
+INFRA-10	high	O. 云与基础设施	容器逃逸风险	检查特权与挂载	最小能力+只读根文件系统	CWE-250
+INFRA-11	high	O. 云与基础设施	K8s RBAC 过宽	检查 ClusterRole	最小权限+命名空间隔离	CWE-732
+INFRA-12	high	O. 云与基础设施	Secret 明文存于 ConfigMap	检查资源配置	用 Secret+KMS	CWE-312
+INFRA-13	medium	O. 云与基础设施	日志外发未脱敏	检查日志管道	脱敏后再外发	CWE-532
+INFRA-14	medium	O. 云与基础设施	无备份或备份不可恢复	演练恢复流程	定期演练+异地	CWE-404
+INFRA-15	medium	O. 云与基础设施	单点无高可用	单实例故障演练	多可用区部署	CWE-400
+INFRA-16	medium	O. 云与基础设施	无资源配额（被薅算力）	压测观察账单	配额+预算告警	CWE-770
+INFRA-17	medium	O. 云与基础设施	出网无限制（被当跳板）	外连测试	出网白名单	CWE-918
+INFRA-18	high	O. 云与基础设施	元数据服务未加固（IMDSv1）	读取 169.254.169.254	强制 IMDSv2+跳数限制	CWE-918
+INFRA-19	medium	O. 云与基础设施	无云审计日志	检查 CloudTrail 等	开启审计并留存	CWE-778
+INFRA-20	medium	O. 云与基础设施	IaC 配置漂移	对比实际资源与代码	定期 drift 检测	CWE-1188
+AVAIL-01	medium	P. 并发、资源与可用性	无超时设置	注入慢依赖	全链路超时	CWE-1088
+AVAIL-02	medium	P. 并发、资源与可用性	无重试退避	故障注入	指数退避+抖动	CWE-1088
+AVAIL-03	high	P. 并发、资源与可用性	无限重试形成风暴	下游故障观察	重试上限+熔断	CWE-400
+AVAIL-04	medium	P. 并发、资源与可用性	连接池无上限	并发压测	池上限+等待超时	CWE-770
+AVAIL-05	medium	P. 并发、资源与可用性	大文件整体读入内存	传大文件观察内存	流式处理	CWE-400
+AVAIL-06	high	P. 并发、资源与可用性	无背压，队列无限增长	生产快于消费	有界队列+拒绝策略	CWE-400
+AVAIL-07	medium	P. 并发、资源与可用性	死锁或锁粒度过大	并发压测	统一锁顺序+超时	CWE-833
+AVAIL-08	high	P. 并发、资源与可用性	竞态条件（TOCTOU）	并发修改同一资源	原子操作+事务	CWE-367
+AVAIL-09	medium	P. 并发、资源与可用性	定时任务重叠执行	任务执行超时观察	分布式锁	CWE-362
+AVAIL-10	medium	P. 并发、资源与可用性	缓存击穿或雪崩	缓存失效瞬间压测	空值缓存+随机 TTL	CWE-400
+AVAIL-11	medium	P. 并发、资源与可用性	缓存与数据库不一致	并发读写观察	先更库再删缓存+延迟双删	CWE-1254
+AVAIL-12	medium	P. 并发、资源与可用性	无熔断降级	依赖故障	熔断器+降级策略	CWE-400
+AVAIL-13	medium	P. 并发、资源与可用性	同步阻塞调用外部服务	依赖变慢	异步化或消息队列	CWE-1088
+AVAIL-14	medium	P. 并发、资源与可用性	大事务长事务	检查事务范围	拆分事务	CWE-667
+AVAIL-15	medium	P. 并发、资源与可用性	无优雅关闭	滚动发布观察	摘流+等待处理完	CWE-404
+AVAIL-16	medium	P. 并发、资源与可用性	文件句柄或连接泄漏	长时间运行观察	finally 释放	CWE-404
+AVAIL-17	low	P. 并发、资源与可用性	事件监听器泄漏	内存增长曲线	及时移除	CWE-401
+AVAIL-18	medium	P. 并发、资源与可用性	无健康检查与就绪探针	检查部署配置	补 liveness/readiness	CWE-754
+AVAIL-19	medium	P. 并发、资源与可用性	本地内存缓存导致多实例不一致	多实例访问	改集中式缓存	CWE-1254
+AVAIL-20	low	P. 并发、资源与可用性	时钟不同步导致逻辑错误	对比节点时间	NTP 同步	CWE-367
+OPS-01	medium	Q. 日志、监控与应急	无审计日志	检查关键操作是否留痕	记录 who/what/when/前后值	CWE-778
+OPS-02	high	Q. 日志、监控与应急	日志含敏感信息	检索日志	脱敏	CWE-532
+OPS-03	low	Q. 日志、监控与应急	日志可被用户注入伪造	输入含换行	转义控制字符	CWE-117
+OPS-04	medium	Q. 日志、监控与应急	关键指标无告警	制造故障观察	配置告警阈值	CWE-778
+OPS-05	high	Q. 日志、监控与应急	异常被吞（空 catch）	搜索空 catch 块	记录+上报+显式失败	CWE-390
+OPS-06	low	Q. 日志、监控与应急	无请求追踪 ID	检查日志	traceId 贯穿全链路	CWE-778
+OPS-07	low	Q. 日志、监控与应急	无错误聚合平台	检查接入情况	接入 Sentry 类服务	CWE-778
+OPS-08	medium	Q. 日志、监控与应急	无速率异常监控	压测观察	监控+告警	CWE-778
+OPS-09	medium	Q. 日志、监控与应急	无登录异常检测	异地或异常时段登录	风控规则+告警	CWE-778
+OPS-10	medium	Q. 日志、监控与应急	无回滚方案	检查发布流程	一键回滚+演练	CWE-1059
+OPS-11	medium	Q. 日志、监控与应急	无灰度与功能开关	检查发布策略	灰度+feature flag	CWE-1059
+OPS-12	medium	Q. 日志、监控与应急	密钥泄露后无轮换流程	检查应急预案	预案+定期演练	CWE-320
+AGENT-01	critical	R. Agent 与 LLM 特有	直接提示注入（仓库/文档/网页）	在 README 埋入指令	隔离不可信内容，指令与数据分离	CWE-1427
+AGENT-02	high	R. Agent 与 LLM 特有	间接提示注入（工具返回内容）	让工具返回恶意指令	工具输出当数据，不当指令	CWE-1427
+AGENT-03	critical	R. Agent 与 LLM 特有	工具权限过大（shell/DB/云）	检查工具清单与凭证	最小权限+沙箱	CWE-269
+AGENT-04	critical	R. Agent 与 LLM 特有	凭证可被读取并外发	让 Agent 读取 .env	凭证隔离+出网管控	CWE-522
+AGENT-05	high	R. Agent 与 LLM 特有	自动安装依赖	触发安装行为	禁止自动安装，走审批	CWE-1357
+AGENT-06	high	R. Agent 与 LLM 特有	使用不可信 MCP server	检查来源与权限	白名单+审计日志	CWE-829
+AGENT-07	high	R. Agent 与 LLM 特有	MCP 工具描述投毒	检查描述文本	人工审核后再启用	CWE-1427
+AGENT-08	high	R. Agent 与 LLM 特有	自动提交或自动部署无 gate	观察提交与部署链路	人工审批+分支保护	CWE-269
+AGENT-09	critical	R. Agent 与 LLM 特有	生产环境写权限	检查凭证范围	只读+临时授权	CWE-269
+AGENT-10	medium	R. Agent 与 LLM 特有	无限循环或无预算上限	观察 token 与调用消耗	步数上限+预算熔断	CWE-400
+AGENT-11	high	R. Agent 与 LLM 特有	上下文含敏感数据被上传	检查 prompt 内容	脱敏+私有部署	CWE-359
+AGENT-12	high	R. Agent 与 LLM 特有	生成代码含隐蔽后门	人工审计关键路径	强制 review+关键路径人工写	CWE-506
+AGENT-13	medium	R. Agent 与 LLM 特有	训练数据回灌导致内部代码外泄	检查数据使用条款	企业版/关闭训练	CWE-359
+AGENT-14	critical	R. Agent 与 LLM 特有	模型输出被直接执行（eval/SQL）	构造输出内容	白名单+参数化，禁止直接执行	CWE-95
+AGENT-15	medium	R. Agent 与 LLM 特有	Agent 日志泄露用户数据	检查 trace 存储	脱敏+保留期	CWE-532
+AGENT-16	medium	R. Agent 与 LLM 特有	多 Agent 间信任传递	检查调用链鉴权	每跳重新鉴权	CWE-269
+AGENT-17	medium	R. Agent 与 LLM 特有	记忆或向量库被污染	写入恶意记忆	写入校验+租户隔离	CWE-345
+AGENT-18	high	R. Agent 与 LLM 特有	RAG 知识库越权检索	用低权账号检索	检索前做权限过滤	CWE-639
+AGENT-19	high	R. Agent 与 LLM 特有	模型输出直接渲染导致 XSS	输出含 HTML 标签	渲染前净化	CWE-79
+AGENT-20	high	R. Agent 与 LLM 特有	高危操作无人工确认	观察是否直接执行	human-in-the-loop	CWE-269
+QUAL-01	high	S. 代码质量与正确性	幻觉 API 或不存在的方法	类型检查+实际运行	类型检查+单测兜底	CWE-477
+QUAL-02	medium	S. 代码质量与正确性	参数顺序或类型错误	静态分析	类型标注+接口测试	CWE-704
+QUAL-03	high	S. 代码质量与正确性	空 catch 吞异常	搜索 catch 块	记录+上报+显式失败	CWE-390
+QUAL-04	high	S. 代码质量与正确性	静默降级返回假数据	故障注入观察	显式失败，不伪造成功	CWE-391
+QUAL-05	medium	S. 代码质量与正确性	边界未处理（null/空/0）	传空值测试	单测覆盖边界	CWE-476
+QUAL-06	medium	S. 代码质量与正确性	浮点金额计算	审查金额逻辑	整数分或 Decimal	CWE-681
+QUAL-07	medium	S. 代码质量与正确性	时区与日期处理错误	跨时区测试	统一 UTC 存储	CWE-188
+QUAL-08	high	S. 代码质量与正确性	并发竞态	并发测试	加锁或原子操作	CWE-362
+QUAL-09	medium	S. 代码质量与正确性	资源未释放	长时间运行观察	finally 释放	CWE-404
+QUAL-10	low	S. 代码质量与正确性	死代码与重复实现	静态扫描	重构合并	CWE-1041
+QUAL-11	medium	S. 代码质量与正确性	满屏 any / ts-ignore	统计数量	开启 strict	CWE-704
+QUAL-12	medium	S. 代码质量与正确性	Lint 或类型检查被关闭	检查配置与 CI	CI 强制执行	CWE-1120
+QUAL-13	high	S. 代码质量与正确性	无测试或仅覆盖 happy path	看覆盖率报告	覆盖边界与异常	CWE-1120
+QUAL-14	medium	S. 代码质量与正确性	测试与实现同源（同一盲区）	审查测试来源	关键用例人工写	CWE-1120
+QUAL-15	low	S. 代码质量与正确性	架构分层被打破	依赖分析	分层约束+lint 规则	CWE-1061
+QUAL-16	low	S. 代码质量与正确性	硬编码魔法值与 URL	全局搜索	配置化	CWE-547
+QUAL-17	medium	S. 代码质量与正确性	无输入校验	传异常值	统一校验层	CWE-20
+QUAL-18	low	S. 代码质量与正确性	错误信息误导	触发异常	明确语义	CWE-209
+QUAL-19	medium	S. 代码质量与正确性	无迁移回滚脚本	检查迁移文件	提供 down 脚本	CWE-1059
+QUAL-20	medium	S. 代码质量与正确性	环境不一致（本地可跑线上挂）	对比环境	容器化+配置校验	CWE-1188

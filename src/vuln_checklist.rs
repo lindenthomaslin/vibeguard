@@ -1,37 +1,31 @@
-//! 漏洞检查清单加载与管理
-//! 包含 410 条漏洞的完整规则库
+//! 漏洞检查清单：410 条规则，从 `assets/checklist.tsv` 编译进二进制。
+//!
+//! 这份清单是扫描与评审的核对表，不是「一定能自动判定」的规则集：
+//! 其中一部分能靠代码特征（正则）直接命中，一部分要靠模型读代码做语义判断，
+//! 还有一部分（约 39%）本质上是运行时行为——比如「连打 100 次密码看有没有锁定」——
+//! 静态分析只能给出「无法判断」。`detect_point` 就是给模型看的判断依据。
 
+use crate::finding::Severity;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// 编译进二进制的清单。改 `assets/checklist.tsv` 后重新 `cargo build` 即可生效。
+const CHECKLIST_TSV: &str = include_str!("../assets/checklist.tsv");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VulnItem {
-    pub id: String,           // e.g., "AUTH-01"
+    /// 清单编号，如 `AUTH-01`
+    pub id: String,
     pub title: String,
-    pub severity: Severity,   // 严重 / 高 / 中 / 低
-    pub category: String,     // A. 认证与账号 ...
-    pub detect_point: String, // 怎么扫
-    pub fix_point: String,    // 修复要点
-    pub cwe: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
-pub enum Severity {
-    Critical, // 严重
-    High,     // 高
-    Medium,   // 中
-    Low,      // 低
-}
-
-impl std::fmt::Display for Severity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Critical => write!(f, "严重"),
-            Self::High => write!(f, "高"),
-            Self::Medium => write!(f, "中"),
-            Self::Low => write!(f, "低"),
-        }
-    }
+    pub severity: Severity,
+    /// 所属大类，如 `A. 认证与账号`
+    pub category: String,
+    /// 怎么扫——同时也是给模型判断的提示
+    pub detect_point: String,
+    /// 修复要点
+    pub fix_point: String,
+    /// 对应的 CWE 编号，没有就是 `None`
+    pub cwe: Option<String>,
 }
 
 pub struct VulnChecklist {
@@ -40,20 +34,33 @@ pub struct VulnChecklist {
     by_category: HashMap<String, Vec<usize>>,
 }
 
+impl Default for VulnChecklist {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// `by_category` / `by_severity` / `categories` 是给第二阶段（按分类分批喂给模型）准备的，
+// 现在只有测试在用；先留着，比删掉再写回来便宜。
+#[allow(dead_code)]
 impl VulnChecklist {
     pub fn new() -> Self {
-        let items = Self::load_builtin_checklist();
-        let mut by_id = HashMap::new();
-        let mut by_category: HashMap<String, Vec<usize>> = HashMap::new();
+        Self::from_tsv(CHECKLIST_TSV)
+    }
 
+    /// 解析 TSV。格式：`id \t 等级 \t 分类 \t 标题 \t 检测点 \t 修复要点 \t CWE`。
+    /// `#` 开头是注释，空行忽略，列数不对的行跳过（不让一条脏数据毁掉整份清单）。
+    pub fn from_tsv(text: &str) -> Self {
+        let items: Vec<VulnItem> = text.lines().filter_map(parse_row).collect();
+        let mut by_id = HashMap::with_capacity(items.len());
+        let mut by_category: HashMap<String, Vec<usize>> = HashMap::new();
         for (idx, item) in items.iter().enumerate() {
             by_id.insert(item.id.clone(), idx);
             by_category
                 .entry(item.category.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(idx);
         }
-
         Self {
             items,
             by_id,
@@ -62,25 +69,27 @@ impl VulnChecklist {
     }
 
     pub fn get(&self, id: &str) -> Option<&VulnItem> {
-        self.by_id
-            .get(id)
-            .and_then(|&idx| self.items.get(idx))
+        self.by_id.get(id).and_then(|&idx| self.items.get(idx))
     }
 
+    /// 按分类取，顺序与清单一致
     pub fn by_category(&self, category: &str) -> Vec<&VulnItem> {
         self.by_category
             .get(category)
-            .map(|indices| {
-                indices
-                    .iter()
-                    .filter_map(|&idx| self.items.get(idx))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|&i| self.items.get(i)).collect())
             .unwrap_or_default()
     }
 
     pub fn all(&self) -> &[VulnItem] {
         &self.items
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
     }
 
     pub fn by_severity(&self, severity: Severity) -> Vec<&VulnItem> {
@@ -90,107 +99,40 @@ impl VulnChecklist {
             .collect()
     }
 
+    /// 所有分类名，按清单里的字母序（A、B、C…）
     pub fn categories(&self) -> Vec<&str> {
-        let mut cats: Vec<_> = self.by_category.keys().map(|s| s.as_str()).collect();
+        let mut cats: Vec<_> = self.by_category.keys().map(String::as_str).collect();
         cats.sort();
         cats
     }
+}
 
-    fn load_builtin_checklist() -> Vec<VulnItem> {
-        vec![
-            // A. 认证与账号 (24条)
-            VulnItem {
-                id: "AUTH-01".to_string(),
-                title: "接口未挂鉴权中间件，匿名即可访问".to_string(),
-                severity: Severity::Critical,
-                category: "A. 认证与账号".to_string(),
-                detect_point: "无 token 遍历全部端点，逐个核对是否经过鉴权".to_string(),
-                fix_point: "网关统一拦截，白名单显式声明".to_string(),
-                cwe: "CWE-306".to_string(),
-            },
-            VulnItem {
-                id: "AUTH-02".to_string(),
-                title: "硬编码后门账号或万能密码".to_string(),
-                severity: Severity::Critical,
-                category: "A. 认证与账号".to_string(),
-                detect_point: "搜索 admin/test/backdoor 常量与特殊分支".to_string(),
-                fix_point: "删除后门，凭据入库并哈希".to_string(),
-                cwe: "CWE-798".to_string(),
-            },
-            VulnItem {
-                id: "AUTH-03".to_string(),
-                title: "默认口令未强制修改（admin/admin）".to_string(),
-                severity: Severity::Critical,
-                category: "A. 认证与账号".to_string(),
-                detect_point: "检查初始化脚本与种子数据".to_string(),
-                fix_point: "首登强制改密，禁用默认账号".to_string(),
-                cwe: "CWE-1392".to_string(),
-            },
-            VulnItem {
-                id: "AUTH-04".to_string(),
-                title: "密码明文落库".to_string(),
-                severity: Severity::Critical,
-                category: "A. 认证与账号".to_string(),
-                detect_point: "查看用户表结构与写入逻辑".to_string(),
-                fix_point: "改 Argon2id/bcrypt 并迁移存量".to_string(),
-                cwe: "CWE-256".to_string(),
-            },
-            VulnItem {
-                id: "AUTH-05".to_string(),
-                title: "弱哈希且无盐（MD5/SHA1）".to_string(),
-                severity: Severity::High,
-                category: "A. 认证与账号".to_string(),
-                detect_point: "搜索 md5( sha1( 调用点".to_string(),
-                fix_point: "换 Argon2id，每用户随机盐".to_string(),
-                cwe: "CWE-916".to_string(),
-            },
-            VulnItem {
-                id: "AUTH-06".to_string(),
-                title: "无密码强度与长度校验".to_string(),
-                severity: Severity::Medium,
-                category: "A. 认证与账号".to_string(),
-                detect_point: "注册/改密接口提交 123456".to_string(),
-                fix_point: "服务端校验长度+弱口令库".to_string(),
-                cwe: "CWE-521".to_string(),
-            },
-            VulnItem {
-                id: "AUTH-07".to_string(),
-                title: "登录失败无锁定或渐进延迟".to_string(),
-                severity: Severity::High,
-                category: "A. 认证与账号".to_string(),
-                detect_point: "连续 100 次错误密码观察响应".to_string(),
-                fix_point: "计数+锁定+延迟+验证码".to_string(),
-                cwe: "CWE-307".to_string(),
-            },
-            VulnItem {
-                id: "AUTHZ-01".to_string(),
-                title: "IDOR：改 id 可读他人资源".to_string(),
-                severity: Severity::Critical,
-                category: "B. 授权与越权".to_string(),
-                detect_point: "用 A 账号 token 访问 B 的资源 id".to_string(),
-                fix_point: "每条查询带 owner 条件".to_string(),
-                cwe: "CWE-639".to_string(),
-            },
-            VulnItem {
-                id: "INJ-01".to_string(),
-                title: "SQL 字符串拼接".to_string(),
-                severity: Severity::Critical,
-                category: "D. 注入类".to_string(),
-                detect_point: "传 ' OR 1=1--".to_string(),
-                fix_point: "全部改参数化查询".to_string(),
-                cwe: "CWE-89".to_string(),
-            },
-            VulnItem {
-                id: "SUP-01".to_string(),
-                title: "幻觉包名（slopsquatting）".to_string(),
-                severity: Severity::Critical,
-                category: "N. 依赖与供应链".to_string(),
-                detect_point: "逐个核对依赖是否真实存在且为官方".to_string(),
-                fix_point: "依赖白名单+人工确认".to_string(),
-                cwe: "CWE-1357".to_string(),
-            },
-        ]
+fn parse_row(line: &str) -> Option<VulnItem> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    if line.trim().is_empty() || line.starts_with('#') {
+        return None;
     }
+    let cells: Vec<&str> = line.split('\t').collect();
+    if cells.len() != 7 {
+        return None;
+    }
+    let severity = match cells[1] {
+        "critical" => Severity::Critical,
+        "high" => Severity::High,
+        "medium" => Severity::Medium,
+        "low" => Severity::Low,
+        _ => return None,
+    };
+    let cwe = cells[6].trim();
+    Some(VulnItem {
+        id: cells[0].to_string(),
+        severity,
+        category: cells[2].to_string(),
+        title: cells[3].to_string(),
+        detect_point: cells[4].to_string(),
+        fix_point: cells[5].to_string(),
+        cwe: (!cwe.is_empty() && cwe != "—").then(|| cwe.to_string()),
+    })
 }
 
 #[cfg(test)]
@@ -198,16 +140,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_load_checklist() {
+    fn the_bundled_checklist_is_complete() {
         let list = VulnChecklist::new();
-        assert!(!list.all().is_empty());
-        assert!(list.get("AUTH-01").is_some());
+        assert_eq!(list.len(), 410, "清单被截断了");
+        assert_eq!(list.categories().len(), 19);
+        // 分级数量与清单总览表一致
+        assert_eq!(list.by_severity(Severity::Critical).len(), 53);
+        assert_eq!(list.by_severity(Severity::High).len(), 145);
+        assert_eq!(list.by_severity(Severity::Medium).len(), 176);
+        assert_eq!(list.by_severity(Severity::Low).len(), 36);
     }
 
     #[test]
-    fn test_by_severity() {
+    fn every_row_has_an_id_a_title_and_a_detect_point() {
         let list = VulnChecklist::new();
-        let critical = list.by_severity(Severity::Critical);
-        assert!(!critical.is_empty());
+        for item in list.all() {
+            assert!(!item.id.is_empty());
+            assert!(!item.title.is_empty(), "{} 没有标题", item.id);
+            assert!(!item.detect_point.is_empty(), "{} 没有检测点", item.id);
+            assert!(!item.category.is_empty(), "{} 没有分类", item.id);
+        }
+        let mut ids: Vec<&str> = list.all().iter().map(|i| i.id.as_str()).collect();
+        let total = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), total, "编号有重复");
+    }
+
+    #[test]
+    fn lookup_and_category_index_work() {
+        let list = VulnChecklist::new();
+        let item = list.get("AUTH-01").expect("AUTH-01");
+        assert_eq!(item.severity, Severity::Critical);
+        assert_eq!(item.cwe.as_deref(), Some("CWE-306"));
+        assert!(list.get("NOPE-99").is_none());
+
+        let auth = list.by_category("A. 认证与账号");
+        assert_eq!(auth.len(), 24);
+        assert!(auth.iter().all(|i| i.category == "A. 认证与账号"));
+    }
+
+    #[test]
+    fn parser_skips_junk_without_losing_good_rows() {
+        let text = "\
+# 注释
+BAD\tline
+
+GOOD-01\thigh\tA. 分类\t标题\t检测点\t修复要点\tCWE-1
+BAD2\tnot-a-severity\tA. 分类\t标题\t检测点\t修复\tCWE-2
+GOOD-02\tlow\tA. 分类\t标题\t检测点\t修复要点\t
+";
+        let list = VulnChecklist::from_tsv(text);
+        let ids: Vec<_> = list.all().iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, ["GOOD-01", "GOOD-02"]);
+        assert_eq!(list.get("GOOD-01").unwrap().severity, Severity::High);
+        assert_eq!(list.get("GOOD-02").unwrap().cwe, None, "空 CWE 应当是 None");
     }
 }
