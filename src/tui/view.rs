@@ -3,6 +3,7 @@
 use super::layout::areas;
 use super::sessions::{SessionItem, SessionsPanel};
 use crate::chat::{Scroll, Transcript};
+use crate::i18n::{pick, tr};
 use crate::mode::Mode;
 use crate::theme::Look;
 use crate::{icon, input};
@@ -428,7 +429,9 @@ fn panel_rect(area: Rect, items: usize) -> Rect {
 }
 
 /// 搜索框前面的标签，宽度固定 5 列（中文各占 2 列 + 1 个空格）
-const SEARCH_LABEL: &str = "搜索 ";
+fn search_label() -> &'static str {
+    tr("搜索 ")
+}
 const SEARCH_LABEL_W: u16 = 5;
 
 fn draw_sessions(frame: &mut Frame, area: Rect, panel: &SessionsPanel, look: &Look) {
@@ -454,9 +457,9 @@ fn draw_sessions(frame: &mut Frame, area: Rect, panel: &SessionsPanel, look: &Lo
     );
     let row = lay.rows.get(lay.cursor.0).cloned().unwrap_or_default();
     let empty = chars.is_empty();
-    let mut search = vec![Span::styled(SEARCH_LABEL, look.muted())];
+    let mut search = vec![Span::styled(search_label(), look.muted())];
     if empty {
-        search.push(Span::styled("输入关键词过滤", look.muted()));
+        search.push(Span::styled(tr("输入关键词过滤"), look.muted()));
     } else {
         search.push(Span::raw(row));
     }
@@ -487,7 +490,7 @@ fn draw_sessions(frame: &mut Frame, area: Rect, panel: &SessionsPanel, look: &Lo
     let items: Vec<&SessionItem> = panel.visible().collect();
     let when_w = items.iter().map(|i| i.when.width()).max().unwrap_or(0);
     let mut lines: Vec<Line> = if items.is_empty() {
-        vec![Line::styled("没有匹配的对话", look.muted())]
+        vec![Line::styled(tr("没有匹配的对话"), look.muted())]
     } else {
         let start = window_start(panel.selected(), list_h.max(1));
         items
@@ -508,7 +511,13 @@ fn draw_sessions(frame: &mut Frame, area: Rect, panel: &SessionsPanel, look: &Lo
                         item.title.clone(),
                         if on { look.accent_bold() } else { Style::new() },
                     ),
-                    Span::styled(format!(" · {} 轮", item.turns), look.muted()),
+                    Span::styled(
+                        pick(
+                            format!(" · {} 轮", item.turns),
+                            format!(" · {} rounds", item.turns),
+                        ),
+                        look.muted(),
+                    ),
                 ];
                 if let Some(snip) = item.snippet(&needle) {
                     // 剩下的列数：前缀、时间、标题、轮数都占掉了，摘要只能用余下的
@@ -542,7 +551,10 @@ fn draw_sessions(frame: &mut Frame, area: Rect, panel: &SessionsPanel, look: &Lo
     let width = inner.width as usize;
     let (foot_text, foot_style) = if let Some(item) = panel.pending() {
         (
-            format!("删除「{}」？再按 Del 确认 · Esc 取消", item.title),
+            pick(
+                format!("删除「{}」？再按 Del 确认 · Esc 取消", item.title),
+                format!("Delete \"{}\"? Press Del again · Esc cancel", item.title),
+            ),
             look.error(),
         )
     } else if let Some(note) = panel.notice() {
@@ -554,9 +566,15 @@ fn draw_sessions(frame: &mut Frame, area: Rect, panel: &SessionsPanel, look: &Lo
         (note.text.clone(), style)
     } else {
         (
-            format!(
-                "共 {} 个 · 输入过滤 · Enter 打开 · Del 删除 · Esc 关闭",
-                panel.total()
+            pick(
+                format!(
+                    "共 {} 个 · 输入过滤 · Enter 打开 · Del 删除 · Esc 关闭",
+                    panel.total()
+                ),
+                format!(
+                    "{} total · type to filter · Enter open · Del delete · Esc close",
+                    panel.total()
+                ),
             ),
             look.muted(),
         )

@@ -6,6 +6,7 @@ use super::view::Choice;
 use crate::chat::{Entry, Scroll, Transcript};
 use crate::editor::{Candidate, Editor};
 use crate::finding::{Finding, Fix};
+use crate::i18n::{pick, tr};
 use crate::input::{Outcome, handle_key};
 use crate::mode::Mode;
 use crate::review;
@@ -286,10 +287,9 @@ impl AppState {
             return;
         }
         self.mode = mode;
-        self.push(Entry::Info(format!(
-            "已切换到「{}」模式：{}",
-            mode.title(),
-            mode.describe()
+        self.push(Entry::Info(pick(
+            format!("已切换到「{}」模式：{}", mode.title(), mode.describe()),
+            format!("Switched to \"{}\" mode: {}", mode.title(), mode.describe()),
         )));
     }
 
@@ -315,7 +315,10 @@ impl AppState {
             return;
         };
         if answer == Answer::Skip {
-            self.push(Entry::Info(format!("已跳过 {}", state.path)));
+            self.push(Entry::Info(pick(
+                format!("已跳过 {}", state.path),
+                format!("Skipped {}", state.path),
+            )));
         }
     }
 
@@ -325,20 +328,23 @@ impl AppState {
     pub fn choice(&self) -> Option<Choice> {
         if let Some(c) = &self.confirm {
             return Some(Choice {
-                title: format!("应用对 {} 的改动？", c.path),
+                title: pick(
+                    format!("应用对 {} 的改动？", c.path),
+                    format!("Apply the change to {}?", c.path),
+                ),
                 items: CONFIRM_OPTIONS
                     .iter()
-                    .map(|&(n, d, _)| (n.to_string(), d.to_string()))
+                    .map(|&(n, d, _)| (tr(n).to_string(), tr(d).to_string()))
                     .collect(),
                 selected: c.selected,
             });
         }
         if let Some(r) = &self.review {
             return Some(Choice {
-                title: "应用这个修复？".into(),
+                title: tr("应用这个修复？").into(),
                 items: REVIEW_OPTIONS
                     .iter()
-                    .map(|&(n, d, _)| (n.to_string(), d.to_string()))
+                    .map(|&(n, d, _)| (tr(n).to_string(), tr(d).to_string()))
                     .collect(),
                 selected: r.selected,
             });
@@ -400,7 +406,7 @@ impl AppState {
         self.push(Entry::Summary(findings.to_vec()));
         let reviewer = Reviewer::new(findings, fixes);
         if reviewer.total() == 0 {
-            self.push(Entry::Info("没有可确认的修复".into()));
+            self.push(Entry::Info(tr("没有可确认的修复").into()));
             return;
         }
         self.review = Some(ReviewState {
@@ -439,15 +445,22 @@ impl AppState {
         };
         let accepted = state.reviewer.into_accepted();
         if accepted.is_empty() {
-            self.push(Entry::Info("没有选中任何修复".into()));
+            self.push(Entry::Info(tr("没有选中任何修复").into()));
             return Action::None;
         }
         if let Some(reason) = self.dry_run.take() {
             let names: Vec<_> = accepted.iter().map(|f| f.finding_id.as_str()).collect();
-            self.push(Entry::Success(format!(
-                "已选中 {} 个修复：{}（未写入文件 · {reason}）",
-                accepted.len(),
-                names.join("、")
+            self.push(Entry::Success(pick(
+                format!(
+                    "已选中 {} 个修复：{}（未写入文件 · {reason}）",
+                    accepted.len(),
+                    names.join("、")
+                ),
+                format!(
+                    "{} fixes selected: {} (nothing written · {reason})",
+                    accepted.len(),
+                    names.join("、")
+                ),
             )));
             return Action::None;
         }
@@ -548,7 +561,7 @@ impl AppState {
                     return Action::Quit;
                 }
                 self.interrupted = true;
-                self.push(Entry::Info("再按一次 Ctrl-C 退出".into()));
+                self.push(Entry::Info(tr("再按一次 Ctrl-C 退出").into()));
                 Action::None
             }
         }
@@ -670,7 +683,7 @@ impl AppState {
             FormEvent::None => Action::None,
             FormEvent::Cancel => {
                 self.form = None;
-                self.push(Entry::Info("已取消，配置没有改动".into()));
+                self.push(Entry::Info(tr("已取消，配置没有改动").into()));
                 Action::None
             }
             FormEvent::Save(settings) => Action::SaveModel(settings),
@@ -716,17 +729,17 @@ impl AppState {
     pub fn begin_request(&mut self, input: &str) {
         self.push(Entry::User(input.to_string()));
         self.transcript.start_assistant();
-        self.busy = Some("等待响应…".into());
+        self.busy = Some(tr("等待响应…").into());
     }
 
     pub fn on_content(&mut self, s: &str) {
         self.transcript.append_content(s);
-        self.busy = Some("生成中…".into());
+        self.busy = Some(tr("生成中…").into());
     }
 
     pub fn on_reasoning(&mut self, s: &str) {
         self.transcript.append_reasoning(s);
-        self.busy = Some("思考中…".into());
+        self.busy = Some(tr("思考中…").into());
     }
 
     pub fn end_request(&mut self) {
@@ -744,9 +757,9 @@ impl AppState {
 pub fn start_demo(app: &mut AppState) {
     let (findings, fixes) = review::demo_data();
     app.push(Entry::Warn(
-        "演示模式：以下是示例数据，不会读取或修改任何文件".into(),
+        tr("演示模式：以下是示例数据，不会读取或修改任何文件").into(),
     ));
-    app.start_review(&findings, &fixes, Some("演示数据".into()));
+    app.start_review(&findings, &fixes, Some(tr("演示数据").into()));
 }
 
 #[cfg(test)]

@@ -14,7 +14,7 @@
   <img alt="rust" src="https://img.shields.io/badge/rust-2024-orange">
   <img alt="build" src="https://img.shields.io/badge/build-single%20binary-informational">
   <img alt="status" src="https://img.shields.io/badge/status-early-yellow">
-  <img alt="tests" src="https://img.shields.io/badge/tests-316%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-325%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -85,6 +85,9 @@ vibeguard config set model deepseek-reasoner
 vibeguard config set permission_mode editable
 vibeguard ping
 ```
+
+界面默认英文，`/lang zh` 切成中文并记住这个选择，`/lang en` 切回去。所有文案集中在一张表
+（`src/i18n/strings.rs`）里，加一条消息就在旁边加一句译文——两边对不上时测试会失败。
 
 ## 当前状态
 

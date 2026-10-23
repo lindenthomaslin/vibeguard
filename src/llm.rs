@@ -6,6 +6,7 @@
 //! - 连接失败、429、5xx 会在开始接收数据前自动重试
 
 use crate::config::{Config, Thinking};
+use crate::i18n::{pick, tr};
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::StreamExt;
 use reqwest::StatusCode;
@@ -252,18 +253,18 @@ impl ApiError {
 
     fn hint(&self) -> &'static str {
         match self.status.as_u16() {
-            400 => "请求格式错误",
-            401 => {
-                "API Key 无效或已过期，请输入 /model 重新设置（命令行：vibeguard config set api_key）"
-            }
-            402 => "账户余额不足，请到服务商的控制台充值",
-            403 => "无权访问该接口",
-            404 => "接口地址不存在，请输入 /model 检查 API 地址和模型名",
-            422 => "请求参数错误，请输入 /model 检查模型和思考力度",
-            429 => "请求过于频繁，已触发限流",
-            500 => "服务端内部错误",
-            502..=504 => "服务暂时不可用",
-            _ => "请求失败",
+            400 => tr("请求格式错误"),
+            401 => tr(
+                "API Key 无效或已过期，请输入 /model 重新设置（命令行：vibeguard config set api_key）",
+            ),
+            402 => tr("账户余额不足，请到服务商的控制台充值"),
+            403 => tr("无权访问该接口"),
+            404 => tr("接口地址不存在，请输入 /model 检查 API 地址和模型名"),
+            422 => tr("请求参数错误，请输入 /model 检查模型和思考力度"),
+            429 => tr("请求过于频繁，已触发限流"),
+            500 => tr("服务端内部错误"),
+            502..=504 => tr("服务暂时不可用"),
+            _ => tr("请求失败"),
         }
     }
 }
@@ -363,7 +364,7 @@ impl LlmClient {
             .map(str::trim)
             .filter(|k| !k.is_empty())
             .ok_or_else(|| {
-                anyhow!("未配置 API Key：运行 `vibeguard config` 进行设置，或导出环境变量 DEEPSEEK_API_KEY")
+                anyhow!("{}", tr("未配置 API Key：运行 `vibeguard config` 进行设置，或导出环境变量 DEEPSEEK_API_KEY"))
             })?
             .to_string();
         let http = builder
@@ -371,7 +372,7 @@ impl LlmClient {
             .read_timeout(Duration::from_secs(cfg.timeout_secs))
             .user_agent(concat!("vibeguard/", env!("CARGO_PKG_VERSION")))
             .build()
-            .context("初始化 HTTP 客户端失败")?;
+            .context(tr("初始化 HTTP 客户端失败"))?;
         Ok(Self {
             http,
             endpoint: format!("{}/chat/completions", cfg.api_base()),
@@ -442,14 +443,23 @@ impl LlmClient {
                 }
                 // 只重试“确定没发出去”的连接错误；超时的请求可能已在服务端计费，不自动重试
                 Err(e) if e.is_connect() => (
-                    anyhow::Error::new(e).context(format!("无法连接 {}", self.endpoint)),
+                    anyhow::Error::new(e).context(pick(
+                        format!("无法连接 {}", self.endpoint),
+                        format!("Cannot connect to {}", self.endpoint),
+                    )),
                     None,
                 ),
                 Err(e) => {
                     let msg = if e.is_timeout() {
-                        format!("请求 {} 超时", self.endpoint)
+                        pick(
+                            format!("请求 {} 超时", self.endpoint),
+                            format!("Request {} timed out", self.endpoint),
+                        )
                     } else {
-                        format!("请求 {} 失败", self.endpoint)
+                        pick(
+                            format!("请求 {} 失败", self.endpoint),
+                            format!("Request {} failed", self.endpoint),
+                        )
                     };
                     return Err(anyhow::Error::new(e).context(msg));
                 }
@@ -483,14 +493,17 @@ fn build_body(
     opts: &ChatOptions,
 ) -> Result<Value> {
     if messages.is_empty() {
-        bail!("消息列表不能为空");
+        bail!("{}", tr("消息列表不能为空"));
     }
     if opts.json
         && !messages
             .iter()
             .any(|m| m.content.to_ascii_lowercase().contains("json"))
     {
-        bail!("JSON 模式要求提示词中包含 \"json\" 字样（DeepSeek API 限制）");
+        bail!(
+            "{}",
+            tr("JSON 模式要求提示词中包含 \"json\" 字样（DeepSeek API 限制）")
+        );
     }
 
     let mut body = json!({
@@ -548,7 +561,7 @@ async fn read_stream(
     let mut done = false;
 
     'outer: while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("读取响应流失败（连接中断或超时）")?;
+        let chunk = chunk.context(tr("读取响应流失败（连接中断或超时）"))?;
         for data in parser.feed(&chunk) {
             if handle_data(&data, &mut out, &mut tool_calls, on_event)? {
                 done = true;
@@ -565,7 +578,7 @@ async fn read_stream(
         }
     }
     if !done && out.finish_reason.is_none() {
-        bail!("响应流意外结束，结果可能不完整");
+        bail!("{}", tr("响应流意外结束，结果可能不完整"));
     }
     out.tool_calls = tool_calls
         .into_values()
@@ -594,10 +607,20 @@ fn handle_data(
     if data.is_empty() {
         return Ok(false);
     }
-    let chunk: Chunk = serde_json::from_str(data)
-        .with_context(|| format!("无法解析响应数据：{}", preview(data, 200)))?;
+    let chunk: Chunk = serde_json::from_str(data).with_context(|| {
+        pick(
+            format!("无法解析响应数据：{}", preview(data, 200)),
+            format!("Cannot parse the response: {}", preview(data, 200)),
+        )
+    })?;
     if let Some(err) = chunk.error {
-        bail!("服务端返回错误：{}", err.message);
+        bail!(
+            "{}",
+            pick(
+                format!("服务端返回错误：{}", err.message),
+                format!("The server returned an error: {}", err.message)
+            )
+        );
     }
     if out.model.is_none() {
         out.model = chunk.model;

@@ -8,6 +8,7 @@
 //! 把自己匹配一遍，所以显式排除。
 
 use crate::finding::{Finding, Severity};
+use crate::i18n::tr;
 use crate::vuln_checklist::VulnChecklist;
 use ignore::WalkBuilder;
 use regex::Regex;
@@ -426,7 +427,7 @@ pub fn scan_local(root: &Path, checklist: &VulnChecklist) -> LocalReport {
                     findings.len(),
                     item.severity,
                     item,
-                    c.rule.note,
+                    tr(c.rule.note),
                     root,
                     path,
                     (idx + 1) as u32,
@@ -479,7 +480,7 @@ fn file_level(path: &Path, root: &Path, checklist: &VulnChecklist, findings: &mu
             findings.len(),
             item.severity,
             item,
-            "环境变量文件被提交进了仓库，里面通常含真实密钥",
+            tr("环境变量文件被提交进了仓库，里面通常含真实密钥"),
             root,
             path,
             1,
@@ -497,7 +498,7 @@ fn file_level(path: &Path, root: &Path, checklist: &VulnChecklist, findings: &mu
             findings.len(),
             item.severity,
             item,
-            "备份或打包文件留在项目里，部署后往往能被直接下载",
+            tr("备份或打包文件留在项目里，部署后往往能被直接下载"),
             root,
             path,
             1,

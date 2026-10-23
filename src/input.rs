@@ -2,6 +2,7 @@
 //! 编辑逻辑在 `editor.rs`，这里负责换行布局、绘制和按键分发。
 
 use crate::editor::Editor;
+use crate::i18n::tr;
 use console::{measure_text_width, style, truncate_str};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use unicode_width::UnicodeWidthChar;
@@ -68,7 +69,9 @@ pub struct Frame {
 }
 
 const MENU_ROWS: usize = 6;
-const HINT: &str = "Enter 发送 · Ctrl-J 换行 · / 命令 · Ctrl-D 退出";
+fn hint() -> &'static str {
+    tr("Enter 发送 · Ctrl-J 换行 · / 命令 · Ctrl-D 退出")
+}
 
 /// 构建一帧。`width` 是整个输入框的显示宽度（含左右边框）。
 /// `show_menu` 为 false 时不画菜单与提示（提交后用来收起它们）。
@@ -101,7 +104,7 @@ pub fn frame(ed: &Editor, width: usize, show_menu: bool) -> Frame {
     if show_menu {
         let matches = ed.matches();
         if matches.is_empty() {
-            let hint = truncate_str(&format!("  {HINT}"), width, "…").to_string();
+            let hint = truncate_str(&format!("  {}", hint()), width, "…").to_string();
             lines.push(style(hint).dim().to_string());
         } else {
             let sel = ed.menu_selected();

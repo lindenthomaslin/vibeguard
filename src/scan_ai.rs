@@ -8,6 +8,7 @@
 //! 「无法判断」，不允许它说「看着没问题」——后者是最危险的一种输出，因为它
 //! 长得像结论。
 
+use crate::i18n::{pick, tr};
 use crate::vuln_checklist::{VulnChecklist, VulnItem};
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
@@ -62,9 +63,9 @@ impl Verdict {
     pub fn label(self) -> &'static str {
         match self {
             Verdict::Exists => "存在",
-            Verdict::Suspected => "疑似",
-            Verdict::NotFound => "不存在",
-            Verdict::Undetermined => "无法判断",
+            Verdict::Suspected => tr("疑似"),
+            Verdict::NotFound => tr("不存在"),
+            Verdict::Undetermined => tr("无法判断"),
         }
     }
 
@@ -115,11 +116,17 @@ impl Batch {
         let right = items.split_off(mid);
         Some((
             Batch {
-                label: format!("{}（前半）", self.label),
+                label: pick(
+                    format!("{}（前半）", self.label),
+                    format!("{} (first half)", self.label),
+                ),
                 items,
             },
             Batch {
-                label: format!("{}（后半）", self.label),
+                label: pick(
+                    format!("{}（后半）", self.label),
+                    format!("{} (second half)", self.label),
+                ),
                 items: right,
             },
         ))
@@ -147,7 +154,10 @@ pub fn batches_with(
         let label = if cats.len() == 1 {
             cats[0].clone()
         } else {
-            format!("{} 等 {} 类", cats[0], cats.len())
+            pick(
+                format!("{} 等 {} 类", cats[0], cats.len()),
+                format!("{} and {} more categories", cats[0], cats.len()),
+            )
         };
         out.push(Batch {
             label,
@@ -544,13 +554,19 @@ fn excerpt(doc: &Doc, keys: &[String], max: usize) -> String {
     let end = (i + 40).min(lines.len());
     let mut out = String::new();
     if start > 0 {
-        out.push_str(&format!("…（前 {start} 行省略）\n"));
+        out.push_str(&pick(
+            format!("…（前 {start} 行省略）\n"),
+            format!("… (first {start} lines omitted)\n"),
+        ));
     }
     for (n, line) in lines[start..end].iter().enumerate() {
         out.push_str(&format!("{:>5}  {line}\n", start + n + 1));
     }
     if end < lines.len() {
-        out.push_str(&format!("…（后面还有 {} 行）\n", lines.len() - end));
+        out.push_str(&pick(
+            format!("…（后面还有 {} 行）\n", lines.len() - end),
+            format!("… ({} more lines below)\n", lines.len() - end),
+        ));
     }
     clip(&out, max)
 }
@@ -781,7 +797,10 @@ fn clip(s: &str, max: usize) -> String {
         return s.to_string();
     }
     let head: String = s.chars().take(max).collect();
-    format!("{head}\n…（已截断）")
+    pick(
+        format!("{head}\n…（已截断）"),
+        format!("{head}\n… (truncated)"),
+    )
 }
 
 /// 拼提示词。`json` 这个词必须出现，否则 DeepSeek 的 json 模式会报错。
@@ -811,7 +830,7 @@ pub fn prompt(batch: &Batch, index: &Index) -> String {
          {\"results\":[{\"id\":\"AUTH-01\",\"verdict\":\"exists\",\"evidence\":\"app.py:12\",\"reason\":\"一句话依据\"}]}\n\n",
     );
 
-    out.push_str("## 仓库文件树\n```\n");
+    out.push_str(tr("## 仓库文件树\n```\n"));
     out.push_str(&index.tree);
     out.push_str("\n```\n\n");
 
@@ -821,26 +840,40 @@ pub fn prompt(batch: &Batch, index: &Index) -> String {
              判断不了就写 undetermined，并在 reason 里说明缺什么。）\n\n",
         );
     } else {
-        out.push_str("## 与本批条目相关的代码（按关键词检索挑出来的，不是全部）\n");
+        out.push_str(tr(
+            "## 与本批条目相关的代码（按关键词检索挑出来的，不是全部）\n",
+        ));
         for (path, body) in &files {
             out.push_str(&format!("### {path}\n```\n{body}\n```\n\n"));
         }
         let rest = index.len().saturating_sub(files.len());
         if rest > 0 {
-            out.push_str(&format!(
-                "（仓库里另有 {rest} 个文件与本批条目不相关，未列出）\n\n"
+            out.push_str(&pick(
+                format!("（仓库里另有 {rest} 个文件与本批条目不相关，未列出）\n\n"),
+                format!(
+                    "(the repository has {rest} more files unrelated to this batch, not listed)\n\n"
+                ),
             ));
         }
     }
 
-    out.push_str("## 待判断条目\n");
+    out.push_str(tr("## 待判断条目\n"));
     for item in &batch.items {
-        out.push_str(&format!(
-            "- {} [{}] {}｜检测点：{}\n",
-            item.id,
-            item.severity.label(),
-            item.title,
-            item.detect_point
+        out.push_str(&pick(
+            format!(
+                "- {} [{}] {}｜检测点：{}\n",
+                item.id,
+                item.severity.label(),
+                item.title,
+                item.detect_point
+            ),
+            format!(
+                "- {} [{}] {} | check: {}\n",
+                item.id,
+                item.severity.label(),
+                item.title,
+                item.detect_point
+            ),
         ));
     }
     out
@@ -849,19 +882,35 @@ pub fn prompt(batch: &Batch, index: &Index) -> String {
 /// 让模型给出修复后的**完整文件**。返回整个文件而不是 diff，
 /// 是因为 diff 的上下文对不上时应用会失败，而全文替换是幂等的。
 pub fn fix_prompt(finding: &crate::finding::Finding, content: &str) -> String {
-    format!(
-        "你是安全工程师，正在修一个具体的安全问题。\n\n         文件：{file}\n         问题：[{id}] {title}\n         位置：第 {line} 行\n         说明：{desc}\n         修复要点：{fix}\n\n         要求：\n         1. 只改和这个问题相关的代码，其余原样保留，不要顺手重构、不要改格式。\n         2. 返回**修好之后的完整文件**，不要省略、不要用「...」代替、不要只给片段。\n         3. 如果这个文件里其实没有问题，把 content 原样返回，并在 note 里说明理由。\n\n         以 json 输出：{{\"content\":\"完整文件内容\",\"note\":\"改了什么\"}}\n\n         文件全文：\n```\n{content}\n```",
-        file = finding.file,
-        id = finding
-            .description
-            .split(']')
-            .next()
-            .unwrap_or("")
-            .trim_start_matches('['),
-        title = finding.title,
-        line = finding.line,
-        desc = finding.description,
-        fix = finding.suggestion,
+    pick(
+        format!(
+            "你是安全工程师，正在修一个具体的安全问题。\n\n         文件：{file}\n         问题：[{id}] {title}\n         位置：第 {line} 行\n         说明：{desc}\n         修复要点：{fix}\n\n         要求：\n         1. 只改和这个问题相关的代码，其余原样保留，不要顺手重构、不要改格式。\n         2. 返回**修好之后的完整文件**，不要省略、不要用「...」代替、不要只给片段。\n         3. 如果这个文件里其实没有问题，把 content 原样返回，并在 note 里说明理由。\n\n         以 json 输出：{{\"content\":\"完整文件内容\",\"note\":\"改了什么\"}}\n\n         文件全文：\n```\n{content}\n```",
+            file = finding.file,
+            id = finding
+                .description
+                .split(']')
+                .next()
+                .unwrap_or("")
+                .trim_start_matches('['),
+            title = finding.title,
+            line = finding.line,
+            desc = finding.description,
+            fix = finding.suggestion,
+        ),
+        format!(
+            "You are a security engineer fixing one specific security issue.\n\n         File: {file}\n         Issue: [{id}] {title}\n         Location: line {line}\n         Detail: {desc}\n         How to fix: {fix}\n\n         Requirements:\n         1. Change only the code related to this issue and keep everything else as is: no opportunistic refactoring, no reformatting.\n         2. Return the **complete fixed file**; do not elide anything, do not use \"...\", do not return a fragment.\n         3. If this file actually has no problem, return content unchanged and explain why in note.\n\n         Output as json: {{\"content\":\"full file content\",\"note\":\"what changed\"}}\n\n         Full file:\n```\n{content}\n```",
+            file = finding.file,
+            id = finding
+                .description
+                .split(']')
+                .next()
+                .unwrap_or("")
+                .trim_start_matches('['),
+            title = finding.title,
+            line = finding.line,
+            desc = finding.description,
+            fix = finding.suggestion,
+        ),
     )
 }
 
@@ -888,7 +937,7 @@ pub fn parse_fix(text: &str) -> Result<String> {
         let body = body.strip_suffix("```").unwrap_or(body);
         return Ok(body.trim_end().to_string());
     }
-    anyhow::bail!("模型没有返回可以解析的文件内容")
+    anyhow::bail!("{}", tr("模型没有返回可以解析的文件内容"))
 }
 
 /// 增量判定后的合并规则：
@@ -945,12 +994,13 @@ struct RawItem {
 /// 解析模型输出。模型经常在 JSON 外面裹一层 ```json，或者前后带一句话，
 /// 所以先截取第一个 `{` 到最后一个 `}` 再解析。
 pub fn parse(text: &str) -> Result<Vec<Judgement>> {
-    let start = text.find('{').context("模型没有返回 JSON")?;
-    let end = text.rfind('}').context("模型返回的 JSON 不完整")?;
+    let start = text.find('{').context(tr("模型没有返回 JSON"))?;
+    let end = text.rfind('}').context(tr("模型返回的 JSON 不完整"))?;
     if end <= start {
-        anyhow::bail!("模型返回的 JSON 不完整");
+        anyhow::bail!("{}", tr("模型返回的 JSON 不完整"));
     }
-    let raw: Raw = serde_json::from_str(&text[start..=end]).context("模型返回的 JSON 解析失败")?;
+    let raw: Raw =
+        serde_json::from_str(&text[start..=end]).context(tr("模型返回的 JSON 解析失败"))?;
 
     let mut out = Vec::new();
     for r in raw.results {
@@ -962,7 +1012,7 @@ pub fn parse(text: &str) -> Result<Vec<Judgement>> {
             id: r.id.trim().to_string(),
             verdict,
             evidence: if evidence.is_empty() {
-                "（未给出证据）".to_string()
+                tr("（未给出证据）").to_string()
             } else {
                 evidence.to_string()
             },
@@ -1016,7 +1066,7 @@ pub fn verify_evidence(root: &Path, evidence: &str) -> Evidence {
                 file,
                 line,
                 text: None,
-                problem: Some("文件不存在".into()),
+                problem: Some(tr("文件不存在").into()),
             };
         }
     };
@@ -1027,7 +1077,10 @@ pub fn verify_evidence(root: &Path, evidence: &str) -> Evidence {
             file,
             line,
             text: None,
-            problem: Some(format!("文件只有 {} 行", rows.len())),
+            problem: Some(pick(
+                format!("文件只有 {} 行", rows.len()),
+                format!("The file has only {} lines", rows.len()),
+            )),
         };
     }
     Evidence {
@@ -1076,7 +1129,10 @@ pub fn to_findings(
             .as_deref()
             .map(|t| {
                 let clipped: String = t.chars().take(90).collect();
-                format!(" · 该行：`{clipped}`")
+                pick(
+                    format!(" · 该行：`{clipped}`"),
+                    format!(" · that line: `{clipped}`"),
+                )
             })
             .unwrap_or_default();
         findings.push(crate::finding::Finding {
@@ -1086,12 +1142,21 @@ pub fn to_findings(
             cwe: item.cwe.clone(),
             file: ev.file,
             line: ev.line,
-            description: format!(
-                "[{}] 模型判定为「{}」：{}{}",
-                j.id,
-                j.verdict.label(),
-                j.reason,
-                code
+            description: pick(
+                format!(
+                    "[{}] 模型判定为「{}」：{}{}",
+                    j.id,
+                    j.verdict.label(),
+                    j.reason,
+                    code
+                ),
+                format!(
+                    "[{}] model says \"{}\": {}{}",
+                    j.id,
+                    j.verdict.label(),
+                    j.reason,
+                    code
+                ),
             ),
             suggestion: item.fix_point.clone(),
         });

@@ -227,6 +227,15 @@ confirm 那个握手是这段代码里最值得看的地方：`start_chat` 发�
 | `font_style` | `default` | `default` / `anime` |
 | `lang` | `en` | `en` / `zh`——界面语言，`/lang zh` 运行时切换 |
 
+### 界面语言
+
+默认英文，`/lang zh` 切中文并记住。文案在调用处仍写成中文，外面包一层 `i18n::tr("…")`，
+由 `src/i18n/strings.rs` 查出英文；查不到就原样返回中文——漏译只露一句中文，不会 panic。
+带插值的用 `i18n::pick(format!(zh), format!(en))`。
+
+表有两个测试守着：不许有重复键、不许空译文，并且两种语言的 `{}` 个数必须一致
+（不一致会在运行时 panic，编译期看不出来）。给模型看的提示词故意不翻——那是指令，不是界面。
+
 ---
 
 ## 8. 数据与隐私
@@ -245,6 +254,8 @@ src/
   main.rs        CLI 入口、子命令、图形能力探测
   app.rs         App + 运行时覆盖项（模型、思考力度）与配置持久化
   config.rs      配置结构、校验、0600 写入
+  i18n.rs        语言开关（En/Zh）与 `tr()`：中文原文当键，查英文
+  i18n/strings.rs  翻译对照表，一条消息一行
   llm.rs         OpenAI 兼容客户端：SSE、tool_calls、重试
   tui/
     mod.rs       事件循环、消息通道、后台任务

@@ -14,7 +14,7 @@
   <img alt="rust" src="https://img.shields.io/badge/rust-2024-orange">
   <img alt="build" src="https://img.shields.io/badge/build-single%20binary-informational">
   <img alt="status" src="https://img.shields.io/badge/status-early-yellow">
-  <img alt="tests" src="https://img.shields.io/badge/tests-316%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-325%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -89,6 +89,10 @@ vibeguard config set model deepseek-reasoner
 vibeguard config set permission_mode editable
 vibeguard ping
 ```
+
+The interface is English by default. `/lang zh` switches it to Chinese for the session and saves
+the choice; `/lang en` switches back. Every message lives in one table (`src/i18n/strings.rs`), so
+adding a string means adding its translation next to it — a test fails if the two ever drift apart.
 
 ## Status
 

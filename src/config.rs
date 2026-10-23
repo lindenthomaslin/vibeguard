@@ -3,6 +3,7 @@
 //! 优先级：命令行参数 > 环境变量 > 配置文件 > 默认值。
 //! 环境变量只作用于“生效配置”，永远不会被写回配置文件。
 
+use crate::i18n::{pick, tr};
 use crate::tools::PermissionMode;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -79,11 +80,11 @@ impl Thinking {
 
     pub fn describe(self) -> &'static str {
         match self {
-            Thinking::Auto => "由服务端决定（DeepSeek 默认开启思考）",
-            Thinking::Off => "关闭思考，响应最快",
-            Thinking::Low => "轻度思考",
-            Thinking::High => "深度思考",
-            Thinking::Max => "最大思考强度，最慢",
+            Thinking::Auto => tr("由服务端决定（DeepSeek 默认开启思考）"),
+            Thinking::Off => tr("关闭思考，响应最快"),
+            Thinking::Low => tr("轻度思考"),
+            Thinking::High => tr("深度思考"),
+            Thinking::Max => tr("最大思考强度，最慢"),
         }
     }
 }
@@ -102,7 +103,12 @@ impl FromStr for Thinking {
         Thinking::ALL
             .into_iter()
             .find(|t| t.as_str() == s)
-            .ok_or_else(|| format!("thinking 可选值为 auto / off / low / high / max，收到 `{s}`"))
+            .ok_or_else(|| {
+                pick(
+                    format!("thinking 可选值为 auto / off / low / high / max，收到 `{s}`"),
+                    format!("thinking must be auto / off / low / high / max, got `{s}`"),
+                )
+            })
     }
 }
 
@@ -118,9 +124,9 @@ pub enum KeySource {
 impl KeySource {
     pub fn label(&self) -> String {
         match self {
-            KeySource::Unset => "未设置".to_string(),
-            KeySource::File => "配置文件".to_string(),
-            KeySource::Env(name) => format!("环境变量 {name}"),
+            KeySource::Unset => tr("未设置").to_string(),
+            KeySource::File => tr("配置文件").to_string(),
+            KeySource::Env(name) => pick(format!("环境变量 {name}"), format!("Env var {name}")),
         }
     }
 }
@@ -183,7 +189,7 @@ pub fn default_path() -> Result<PathBuf> {
     let base = match std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
         Some(dir) => PathBuf::from(dir),
         None => dirs::home_dir()
-            .context("无法确定用户主目录")?
+            .context(tr("无法确定用户主目录"))?
             .join(".config"),
     };
     Ok(base.join("vibeguard").join("config.toml"))
@@ -202,8 +208,9 @@ pub fn legacy_model_note(model: &str) -> Option<String> {
         "deepseek-v4-flash" | "deepseek-v4-flash-vision-exp" => "deepseek-flash",
         _ => return None,
     };
-    Some(format!(
-        "模型 `{model}` 已被 DeepSeek 弃用，建议改用 {replacement}"
+    Some(pick(
+        format!("模型 `{model}` 已被 DeepSeek 弃用，建议改用 {replacement}"),
+        format!("Model `{model}` is deprecated by DeepSeek; {replacement} is recommended instead"),
     ))
 }
 
@@ -215,11 +222,20 @@ impl Config {
             Ok(text) => text,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(e) => {
-                return Err(e).with_context(|| format!("读取配置文件失败：{}", path.display()));
+                return Err(e).with_context(|| {
+                    pick(
+                        format!("读取配置文件失败：{}", path.display()),
+                        format!("Reading the config file failed: {}", path.display()),
+                    )
+                });
             }
         };
-        let mut cfg: Config = toml::from_str(&text)
-            .with_context(|| format!("配置文件格式错误：{}", path.display()))?;
+        let mut cfg: Config = toml::from_str(&text).with_context(|| {
+            pick(
+                format!("配置文件格式错误：{}", path.display()),
+                format!("Malformed config file: {}", path.display()),
+            )
+        })?;
         cfg.api_key = cfg
             .api_key
             .map(|k| k.trim().to_string())
@@ -234,11 +250,20 @@ impl Config {
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            fs::create_dir_all(dir)
-                .with_context(|| format!("创建配置目录失败：{}", dir.display()))?;
+            fs::create_dir_all(dir).with_context(|| {
+                pick(
+                    format!("创建配置目录失败：{}", dir.display()),
+                    format!("Creating the config directory failed: {}", dir.display()),
+                )
+            })?;
         }
-        let text = toml::to_string_pretty(self).context("序列化配置失败")?;
-        write_private(path, &text).with_context(|| format!("写入配置文件失败：{}", path.display()))
+        let text = toml::to_string_pretty(self).context(tr("序列化配置失败"))?;
+        write_private(path, &text).with_context(|| {
+            pick(
+                format!("写入配置文件失败：{}", path.display()),
+                format!("Writing the config file failed: {}", path.display()),
+            )
+        })
     }
 
     /// 应用环境变量覆盖。`read` 用于注入环境，测试中可以传入假环境。
@@ -266,30 +291,58 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         let raw = self.base_url.trim();
-        let url =
-            reqwest::Url::parse(raw).with_context(|| format!("base_url 不是合法的 URL：{raw}"))?;
+        let url = reqwest::Url::parse(raw).with_context(|| {
+            pick(
+                format!("base_url 不是合法的 URL：{raw}"),
+                format!("base_url is not a valid URL: {raw}"),
+            )
+        })?;
         if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-            bail!("base_url 必须是 http:// 或 https:// 地址：{raw}");
+            bail!(
+                "{}",
+                pick(
+                    format!("base_url 必须是 http:// 或 https:// 地址：{raw}"),
+                    format!("base_url must be an http:// or https:// address: {raw}")
+                )
+            );
         }
         if self.model.trim().is_empty() {
-            bail!("model 不能为空");
+            bail!("{}", tr("model 不能为空"));
         }
         if !(0.0..=2.0).contains(&self.temperature) {
             bail!(
-                "temperature 取值范围为 0.0 ~ 2.0，当前为 {}",
-                self.temperature
+                "{}",
+                pick(
+                    format!(
+                        "temperature 取值范围为 0.0 ~ 2.0，当前为 {}",
+                        self.temperature
+                    ),
+                    format!(
+                        "temperature must be 0.0 ~ 2.0, currently {}",
+                        self.temperature
+                    )
+                )
             );
         }
         if self.max_tokens == Some(0) {
-            bail!("max_tokens 必须大于 0");
+            bail!("{}", tr("max_tokens 必须大于 0"));
         }
         if self.timeout_secs == 0 {
-            bail!("timeout_secs 必须大于 0");
+            bail!("{}", tr("timeout_secs 必须大于 0"));
         }
         if !(1..=MAX_TOOL_ROUNDS_CEILING).contains(&self.max_tool_rounds) {
             bail!(
-                "max_tool_rounds 取值范围为 1 ~ {MAX_TOOL_ROUNDS_CEILING}，当前为 {}",
-                self.max_tool_rounds
+                "{}",
+                pick(
+                    format!(
+                        "max_tool_rounds 取值范围为 1 ~ {MAX_TOOL_ROUNDS_CEILING}，当前为 {}",
+                        self.max_tool_rounds
+                    ),
+                    format!(
+                        "max_tool_rounds must be 1 ~ {MAX_TOOL_ROUNDS_CEILING}, currently {}",
+                        self.max_tool_rounds
+                    )
+                )
             );
         }
         Ok(())
@@ -305,9 +358,11 @@ impl Config {
             let host = url.host_str().unwrap_or_default();
             let local = matches!(host, "localhost" | "[::1]") || host.starts_with("127.");
             if url.scheme() == "http" && !local {
-                out.push(format!(
+                out.push(pick(format!(
                     "base_url 使用 http:// 访问远程主机 {host}，API Key 会被明文传输"
-                ));
+                ), format!(
+                    "base_url uses http:// for remote host {host}; the API key would travel in clear text"
+                )));
             }
         }
         out
@@ -334,7 +389,13 @@ impl Config {
             "theme" => self.theme.clone(),
             "font_style" => self.font_style.clone(),
             "lang" => self.lang.clone(),
-            _ => bail!("未知配置项 `{key}`，可选：{}", KEYS.join(", ")),
+            _ => bail!(
+                "{}",
+                pick(
+                    format!("未知配置项 `{key}`，可选：{}", KEYS.join(", ")),
+                    format!("Unknown config key `{key}`; options: {}", KEYS.join(", "))
+                )
+            ),
         })
     }
 
@@ -363,36 +424,57 @@ impl Config {
             "model" => self.model = v.to_string(),
             "thinking" => self.thinking = v.parse().map_err(anyhow::Error::msg)?,
             "temperature" => {
-                self.temperature = v
-                    .parse()
-                    .with_context(|| format!("temperature 需要是数字：{v}"))?
+                self.temperature = v.parse().with_context(|| {
+                    pick(
+                        format!("temperature 需要是数字：{v}"),
+                        format!("temperature must be a number: {v}"),
+                    )
+                })?
             }
             "max_tokens" => {
                 self.max_tokens = if v.is_empty() || v.eq_ignore_ascii_case("none") {
                     None
                 } else {
-                    Some(
-                        v.parse()
-                            .with_context(|| format!("max_tokens 需要是正整数：{v}"))?,
-                    )
+                    Some(v.parse().with_context(|| {
+                        pick(
+                            format!("max_tokens 需要是正整数：{v}"),
+                            format!("max_tokens must be a positive integer: {v}"),
+                        )
+                    })?)
                 }
             }
             "timeout_secs" => {
-                self.timeout_secs = v
-                    .parse()
-                    .with_context(|| format!("timeout_secs 需要是正整数：{v}"))?
+                self.timeout_secs = v.parse().with_context(|| {
+                    pick(
+                        format!("timeout_secs 需要是正整数：{v}"),
+                        format!("timeout_secs must be a positive integer: {v}"),
+                    )
+                })?
             }
             "max_tool_rounds" => {
-                self.max_tool_rounds = v
-                    .parse()
-                    .with_context(|| format!("max_tool_rounds 需要是正整数：{v}"))?
+                self.max_tool_rounds = v.parse().with_context(|| {
+                    pick(
+                        format!("max_tool_rounds 需要是正整数：{v}"),
+                        format!("max_tool_rounds must be a positive integer: {v}"),
+                    )
+                })?
             }
             "permission_mode" => {
                 self.permission_mode = match v.to_lowercase().as_str() {
                     "readonly" => PermissionMode::ReadOnly,
                     "editable" => PermissionMode::Editable,
                     "full" => PermissionMode::Full,
-                    _ => bail!("permission_mode 可选值为 readonly / editable / full，收到 `{v}`"),
+                    _ => bail!(
+                        "{}",
+                        pick(
+                            format!(
+                                "permission_mode 可选值为 readonly / editable / full，收到 `{v}`"
+                            ),
+                            format!(
+                                "permission_mode must be readonly / editable / full, got `{v}`"
+                            )
+                        )
+                    ),
                 }
             }
             "workspace_root" => {
@@ -407,7 +489,13 @@ impl Config {
                 if matches!(theme.as_str(), "dark" | "light") {
                     self.theme = theme;
                 } else {
-                    bail!("theme 可选值为 dark / light，收到 `{v}`");
+                    bail!(
+                        "{}",
+                        pick(
+                            format!("theme 可选值为 dark / light，收到 `{v}`"),
+                            format!("theme must be dark / light, got `{v}`")
+                        )
+                    );
                 }
             }
             "font_style" => {
@@ -415,16 +503,34 @@ impl Config {
                 if matches!(style.as_str(), "default" | "anime") {
                     self.font_style = style;
                 } else {
-                    bail!("font_style 可选值为 default / anime，收到 `{v}`");
+                    bail!(
+                        "{}",
+                        pick(
+                            format!("font_style 可选值为 default / anime，收到 `{v}`"),
+                            format!("font_style must be default / anime, got `{v}`")
+                        )
+                    );
                 }
             }
             "lang" => {
                 let Some(lang) = crate::i18n::Lang::parse(v) else {
-                    bail!("lang 可选值为 en / zh，收到 `{v}`");
+                    bail!(
+                        "{}",
+                        pick(
+                            format!("lang 可选值为 en / zh，收到 `{v}`"),
+                            format!("lang must be en / zh, got `{v}`")
+                        )
+                    );
                 };
                 self.lang = lang.code().to_string();
             }
-            _ => bail!("未知配置项 `{key}`，可选：{}", KEYS.join(", ")),
+            _ => bail!(
+                "{}",
+                pick(
+                    format!("未知配置项 `{key}`，可选：{}", KEYS.join(", ")),
+                    format!("Unknown config key `{key}`; options: {}", KEYS.join(", "))
+                )
+            ),
         }
         Ok(())
     }
@@ -449,7 +555,13 @@ impl Config {
             "theme" => self.theme = d.theme,
             "font_style" => self.font_style = d.font_style,
             "lang" => self.lang = d.lang,
-            _ => bail!("未知配置项 `{key}`，可选：{}", KEYS.join(", ")),
+            _ => bail!(
+                "{}",
+                pick(
+                    format!("未知配置项 `{key}`，可选：{}", KEYS.join(", ")),
+                    format!("Unknown config key `{key}`; options: {}", KEYS.join(", "))
+                )
+            ),
         }
         Ok(())
     }

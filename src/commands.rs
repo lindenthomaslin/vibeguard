@@ -5,6 +5,7 @@ use crate::config::{
     self, API_KEY_ENVS, BASE_URL_ENV, Config, KNOWN_MODELS, KeySource, MODEL_ENV, Thinking,
     mask_key,
 };
+use crate::i18n::{pick, tr};
 use crate::llm::{ChatOptions, LlmClient, Message};
 use crate::ui;
 use anyhow::Result;
@@ -37,7 +38,7 @@ pub(crate) fn display_value(cfg: &Config, key: &str) -> String {
         "api_key" => cfg
             .api_key
             .as_deref()
-            .map_or_else(|| "未设置".to_string(), mask_key),
+            .map_or_else(|| tr("未设置").to_string(), mask_key),
         _ => cfg.get(key).unwrap_or_default(),
     }
 }
@@ -45,9 +46,10 @@ pub(crate) fn display_value(cfg: &Config, key: &str) -> String {
 pub(crate) fn source_label(app: &App, cfg: &Config, key: &str) -> Option<String> {
     match key {
         "api_key" => (cfg.key_source != KeySource::Unset).then(|| cfg.key_source.label()),
-        "model" if app.overrides.model.is_some() => Some("本次运行覆盖".into()),
-        "thinking" if app.overrides.thinking.is_some() => Some("本次运行覆盖".into()),
-        _ => env_override(key).map(|name| format!("环境变量 {name}")),
+        "model" if app.overrides.model.is_some() => Some(tr("本次运行覆盖").into()),
+        "thinking" if app.overrides.thinking.is_some() => Some(tr("本次运行覆盖").into()),
+        _ => env_override(key)
+            .map(|name| pick(format!("环境变量 {name}"), format!("Env var {name}"))),
     }
 }
 
@@ -56,11 +58,11 @@ pub fn show_config(app: &App) {
     let note = if app.config_path.exists() {
         ""
     } else {
-        "（尚未创建，使用默认值）"
+        tr("（尚未创建，使用默认值）")
     };
     println!(
         "{} {}{}",
-        style("配置文件").bold(),
+        style(tr("配置文件")).bold(),
         ui::tilde(&app.config_path),
         style(note).dim()
     );
@@ -88,9 +90,9 @@ pub fn config_set(app: &mut App, key: &str, value: Option<String>) -> Result<()>
     let value = match value {
         Some(v) => {
             if key == "api_key" {
-                ui::hint(
+                ui::hint(tr(
                     "提示：命令行里的 API Key 可能被记录到 shell 历史，省略 value 可改为交互输入",
-                );
+                ));
             }
             v
         }
@@ -104,10 +106,14 @@ pub fn config_set(app: &mut App, key: &str, value: Option<String>) -> Result<()>
     };
     app.file.set(key, &value)?;
     app.save()?;
-    ui::success(&format!("已保存 {key} = {}", display_value(&app.file, key)));
+    ui::success(&pick(
+        format!("已保存 {key} = {}", display_value(&app.file, key)),
+        format!("Saved {key} = {}", display_value(&app.file, key)),
+    ));
     if let Some(name) = env_override(key) {
-        ui::warn(&format!(
-            "环境变量 {name} 已设置，它会覆盖配置文件中的 {key}"
+        ui::warn(&pick(
+            format!("环境变量 {name} 已设置，它会覆盖配置文件中的 {key}"),
+            format!("Env var {name} is set and overrides {key} in the config"),
         ));
     }
     for w in app.file.warnings() {
@@ -119,9 +125,12 @@ pub fn config_set(app: &mut App, key: &str, value: Option<String>) -> Result<()>
 pub fn config_unset(app: &mut App, key: &str) -> Result<()> {
     app.file.unset(key)?;
     app.save()?;
-    ui::success(&format!(
-        "{key} 已恢复默认值：{}",
-        display_value(&app.file, key)
+    ui::success(&pick(
+        format!("{key} 已恢复默认值：{}", display_value(&app.file, key)),
+        format!(
+            "{key} restored to its default: {}",
+            display_value(&app.file, key)
+        ),
     ));
     Ok(())
 }
@@ -129,17 +138,26 @@ pub fn config_unset(app: &mut App, key: &str) -> Result<()> {
 /// 交互式配置向导
 pub async fn wizard(app: &mut App) -> Result<()> {
     let theme = theme();
-    ui::info(&format!(
-        "配置 VibeGuard，保存到 {}",
-        ui::tilde(&app.config_path)
+    ui::info(&pick(
+        format!("配置 VibeGuard，保存到 {}", ui::tilde(&app.config_path)),
+        format!(
+            "Configure VibeGuard, saved to {}",
+            ui::tilde(&app.config_path)
+        ),
     ));
 
     // API Key
     let env_key = env_override("api_key");
     let prompt = match (&app.file.api_key, env_key) {
-        (Some(k), _) => format!("API Key（当前 {}，回车保留）", mask_key(k)),
-        (None, Some(name)) => format!("API Key（当前使用环境变量 {name}，回车跳过）"),
-        (None, None) => "API Key（在 platform.deepseek.com 获取）".to_string(),
+        (Some(k), _) => pick(
+            format!("API Key（当前 {}，回车保留）", mask_key(k)),
+            format!("API key (current {}, Enter to keep)", mask_key(k)),
+        ),
+        (None, Some(name)) => pick(
+            format!("API Key（当前使用环境变量 {name}，回车跳过）"),
+            format!("API key (using env var {name}, Enter to skip)"),
+        ),
+        (None, None) => tr("API Key（在 platform.deepseek.com 获取）").to_string(),
     };
     let key = Password::with_theme(&theme)
         .with_prompt(prompt)
@@ -156,19 +174,19 @@ pub async fn wizard(app: &mut App) -> Result<()> {
     }
     let custom = models.len();
     let mut items = models.clone();
-    items.push("自定义…".to_string());
+    items.push(tr("自定义…").to_string());
     let default = models
         .iter()
         .position(|m| *m == app.file.model)
         .unwrap_or(0);
     let idx = Select::with_theme(&theme)
-        .with_prompt("模型")
+        .with_prompt(tr("模型"))
         .items(&items)
         .default(default)
         .interact()?;
     let model = if idx == custom {
         Input::<String>::with_theme(&theme)
-            .with_prompt("模型名称")
+            .with_prompt(tr("模型名称"))
             .interact_text()?
     } else {
         models[idx].clone()
@@ -185,7 +203,7 @@ pub async fn wizard(app: &mut App) -> Result<()> {
         .position(|t| *t == app.file.thinking)
         .unwrap_or(0);
     let idx = Select::with_theme(&theme)
-        .with_prompt("思考模式")
+        .with_prompt(tr("思考模式"))
         .items(&labels)
         .default(default)
         .interact()?;
@@ -193,7 +211,7 @@ pub async fn wizard(app: &mut App) -> Result<()> {
 
     // API 地址
     let url: String = Input::with_theme(&theme)
-        .with_prompt("API 地址")
+        .with_prompt(tr("API 地址"))
         .default(app.file.base_url.clone())
         .validate_with(|v: &String| -> Result<(), String> {
             let mut probe = Config::default();
@@ -203,10 +221,14 @@ pub async fn wizard(app: &mut App) -> Result<()> {
     app.file.set("base_url", &url)?;
 
     app.save()?;
-    ui::success(&format!("配置已保存到 {}", ui::tilde(&app.config_path)));
+    ui::success(&pick(
+        format!("配置已保存到 {}", ui::tilde(&app.config_path)),
+        format!("Config saved to {}", ui::tilde(&app.config_path)),
+    ));
     if let Some(name) = env_key {
-        ui::warn(&format!(
-            "环境变量 {name} 已设置，它会覆盖配置文件中的 api_key"
+        ui::warn(&pick(
+            format!("环境变量 {name} 已设置，它会覆盖配置文件中的 api_key"),
+            format!("Env var {name} is set and overrides api_key in the config"),
         ));
     }
     for w in app.file.warnings() {
@@ -214,11 +236,11 @@ pub async fn wizard(app: &mut App) -> Result<()> {
     }
 
     if app.effective().api_key.is_none() {
-        ui::warn("尚未设置 API Key，扫描和修复功能将无法使用");
+        ui::warn(tr("尚未设置 API Key，扫描和修复功能将无法使用"));
         return Ok(());
     }
     if Confirm::with_theme(&theme)
-        .with_prompt("现在测试 API 连接？")
+        .with_prompt(tr("现在测试 API 连接？"))
         .default(true)
         .interact()?
     {
@@ -243,7 +265,10 @@ pub async fn ping(app: &App) -> Result<()> {
     ];
 
     let mut printer = ui::StreamPrinter::new(
-        format!("连接 {}（{}）", cfg.api_base(), client.model()),
+        pick(
+            format!("连接 {}（{}）", cfg.api_base(), client.model()),
+            format!("Connecting to {} ({})", cfg.api_base(), client.model()),
+        ),
         false,
     );
     let start = Instant::now();
@@ -252,7 +277,7 @@ pub async fn ping(app: &App) -> Result<()> {
         .await;
     printer.finish();
     let res = result?;
-    ui::success("API 连接正常");
+    ui::success(tr("API 连接正常"));
     ui::usage_line(&res, start.elapsed());
     Ok(())
 }

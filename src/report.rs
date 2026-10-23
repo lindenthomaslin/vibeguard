@@ -8,6 +8,7 @@
 //! 410 条里的 20 条，就是在骗人——这是这个工具最容易犯的错。
 
 use crate::finding::{Finding, Severity, counts, sorted};
+use crate::i18n::{pick, tr};
 use crate::scan_ai::{Judgement, Verdict};
 use serde::Serialize;
 
@@ -44,32 +45,59 @@ impl Meta {
 /// 生成 Markdown 报告
 pub fn markdown(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> String {
     let mut out = String::new();
-    out.push_str("# VibeGuard 扫描报告\n\n");
+    out.push_str(tr("# VibeGuard 扫描报告\n\n"));
     out.push_str("| | |\n|---|---|\n");
-    out.push_str(&format!("| 扫描目标 | `{}` |\n", meta.root));
-    out.push_str(&format!("| 生成时间 | {} |\n", meta.when));
-    out.push_str(&format!("| 工具版本 | vibeguard {} |\n", meta.version));
-    out.push_str(&format!("| 扫描文件 | {} 个 |\n", meta.files_scanned));
-    out.push_str(&format!(
-        "| 清单覆盖 | {}/{} 条（本地规则 {} 条 + 模型判定 {} 条） |\n\n",
-        meta.covered(judgements),
-        meta.checklist_total,
-        meta.local_rules,
-        judgements.len()
+    out.push_str(&pick(
+        format!("| 扫描目标 | `{}` |\n", meta.root),
+        format!("| Target | `{}` |\n", meta.root),
+    ));
+    out.push_str(&pick(
+        format!("| 生成时间 | {} |\n", meta.when),
+        format!("| Generated | {} |\n", meta.when),
+    ));
+    out.push_str(&pick(
+        format!("| 工具版本 | vibeguard {} |\n", meta.version),
+        format!("| Tool version | vibeguard {} |\n", meta.version),
+    ));
+    out.push_str(&pick(
+        format!("| 扫描文件 | {} 个 |\n", meta.files_scanned),
+        format!("| Files scanned | {} |\n", meta.files_scanned),
+    ));
+    out.push_str(&pick(
+        format!(
+            "| 清单覆盖 | {}/{} 条（本地规则 {} 条 + 模型判定 {} 条） |\n\n",
+            meta.covered(judgements),
+            meta.checklist_total,
+            meta.local_rules,
+            judgements.len()
+        ),
+        format!(
+            "| Checklist coverage | {}/{} items ({} from local rules + {} from the model) |\n\n",
+            meta.covered(judgements),
+            meta.checklist_total,
+            meta.local_rules,
+            judgements.len()
+        ),
     ));
     if meta.skipped_items > 0 {
-        out.push_str(&format!(
+        out.push_str(&pick(format!(
             "| AI 判定范围 | 安全类 A–M、P、R（N/O/Q/S 的 {} 条工程规范未交给模型，`--all` 可全跑） |\n",
             meta.skipped_items
-        ));
+        ), format!(
+            "| AI judging | security A–M, P, R ({} engineering items in N/O/Q/S were not sent to the model; `--all` runs them) |\n",
+            meta.skipped_items
+        )));
     }
 
     if !meta.failed.is_empty() {
-        out.push_str(&format!(
+        out.push_str(&pick(format!(
             "\n> ⚠ 有 {} 批判定没有跑成功，上面的覆盖数字**不完整**。\
              \n> 修好网络/额度之后重跑 `/scan --ai`，否则这些条目等于没看。\n\n",
             meta.failed.len()
-        ));
+        ), format!(
+            "\n> ⚠ {} judgement batches failed, so the coverage numbers above are **incomplete**.\n> Rerun `/scan --ai` once the network or quota is fixed, otherwise those items were never checked.\n\n",
+            meta.failed.len()
+        )));
         for f in &meta.failed {
             out.push_str(&format!("> - {f}\n"));
         }
@@ -77,10 +105,13 @@ pub fn markdown(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> 
     }
 
     if !meta.unverified.is_empty() {
-        out.push_str(&format!(
+        out.push_str(&pick(format!(
             "\n> ⚠ 有 {} 条模型判定找不到对应代码（文件不存在或行号超范围），**已从下面的清单里剔除**。\n> 剔除不等于没问题：这些条目可能确实存在，只是模型指错了地方，值得手工看一眼。\n\n",
             meta.unverified.len()
-        ));
+        ), format!(
+            "\n> ⚠ {} model verdicts could not be matched to code (missing file, or line out of range) and **were removed from the list below**.\n> Removed is not the same as clean: these may well be real, the model just pointed at the wrong place. Worth a manual look.\n\n",
+            meta.unverified.len()
+        )));
         for u in &meta.unverified {
             out.push_str(&format!("> - {u}\n"));
         }
@@ -88,12 +119,15 @@ pub fn markdown(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> 
     }
 
     // ---- 结论 ----
-    out.push_str("## 结论\n\n");
+    out.push_str(tr("## 结论\n\n"));
     if findings.is_empty() {
-        out.push_str("本次未发现已确认的问题。\n\n");
+        out.push_str(tr("本次未发现已确认的问题。\n\n"));
     } else {
-        out.push_str(&format!("共发现 **{}** 个问题：\n\n", findings.len()));
-        out.push_str("| 级别 | 数量 |\n|---|---:|\n");
+        out.push_str(&pick(
+            format!("共发现 **{}** 个问题：\n\n", findings.len()),
+            format!("Found **{}** issues:\n\n", findings.len()),
+        ));
+        out.push_str(tr("| 级别 | 数量 |\n|---|---:|\n"));
         for (sev, n) in counts(findings).into_iter().filter(|&(_, n)| n > 0) {
             out.push_str(&format!("| {} | {} |\n", sev.label(), n));
         }
@@ -102,7 +136,7 @@ pub fn markdown(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> 
 
     if !judgements.is_empty() {
         let count = |v: Verdict| judgements.iter().filter(|j| j.verdict == v).count();
-        out.push_str("| 模型判定 | 条数 |\n|---|---:|\n");
+        out.push_str(tr("| 模型判定 | 条数 |\n|---|---:|\n"));
         for v in [
             Verdict::Exists,
             Verdict::Suspected,
@@ -113,17 +147,20 @@ pub fn markdown(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> 
         }
         out.push('\n');
         if count(Verdict::Undetermined) > 0 {
-            out.push_str(&format!(
+            out.push_str(&pick(format!(
                 "> {} 条被判为「无法判断」：它们需要把服务跑起来发请求才能确认\
                  （限流、爆破、越权、响应头这类）。**不要把它们当成「没问题」。**\n\n",
                 count(Verdict::Undetermined)
-            ));
+            ), format!(
+                "> {} items were judged \"undetermined\": confirming them means running the service and sending requests (rate limiting, brute force, broken access control, response headers). **Do not read them as clean.**\n\n",
+                count(Verdict::Undetermined)
+            )));
         }
     }
 
     // ---- 明细 ----
     if !findings.is_empty() {
-        out.push_str("## 发现明细\n\n");
+        out.push_str(tr("## 发现明细\n\n"));
         for (i, f) in sorted(findings).into_iter().enumerate() {
             out.push_str(&format!(
                 "### {}. [{}] {}\n\n",
@@ -131,28 +168,43 @@ pub fn markdown(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> 
                 f.severity.label(),
                 f.title
             ));
-            out.push_str(&format!("- **位置**：`{}:{}`\n", f.file, f.line));
+            out.push_str(&pick(
+                format!("- **位置**：`{}:{}`\n", f.file, f.line),
+                format!("- **Location**: `{}:{}`\n", f.file, f.line),
+            ));
             if let Some(cwe) = &f.cwe {
-                out.push_str(&format!("- **编号**：{} · {}\n", checklist_id(f), cwe));
+                out.push_str(&pick(
+                    format!("- **编号**：{} · {}\n", checklist_id(f), cwe),
+                    format!("- **ID**: {} · {}\n", checklist_id(f), cwe),
+                ));
             } else {
-                out.push_str(&format!("- **编号**：{}\n", checklist_id(f)));
+                out.push_str(&pick(
+                    format!("- **编号**：{}\n", checklist_id(f)),
+                    format!("- **ID**: {}\n", checklist_id(f)),
+                ));
             }
             if !f.description.is_empty() {
-                out.push_str(&format!("- **说明**：{}\n", f.description));
+                out.push_str(&pick(
+                    format!("- **说明**：{}\n", f.description),
+                    format!("- **Detail**: {}\n", f.description),
+                ));
             }
             if !f.suggestion.is_empty() {
-                out.push_str(&format!("- **修复建议**：{}\n", f.suggestion));
+                out.push_str(&pick(
+                    format!("- **修复建议**：{}\n", f.suggestion),
+                    format!("- **Fix**: {}\n", f.suggestion),
+                ));
             }
             out.push('\n');
         }
     }
 
     // ---- 附注 ----
-    out.push_str("## 说明\n\n");
+    out.push_str(tr("## 说明\n\n"));
     out.push_str(
-        "- 本地规则命中是**确定**的：它看到了具体的代码特征（字符串里的密钥、`shell=True`、`eval` 调用）。\n\
+        tr("- 本地规则命中是**确定**的：它看到了具体的代码特征（字符串里的密钥、`shell=True`、`eval` 调用）。\n\
          - 「疑似」是模型读到相关代码但证据不足，需要人工确认。\n\
-         - 本报告由 VibeGuard 生成，是审计的**起点**不是结论；每条都要人看过再改。\n",
+         - 本报告由 VibeGuard 生成，是审计的**起点**不是结论；每条都要人看过再改。\n"),
     );
     out
 }

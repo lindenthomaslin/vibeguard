@@ -1,5 +1,6 @@
 //! 文件和命令工具实现，供 AI 通过工具调用执行。
 
+use crate::i18n::{pick, tr};
 use crate::llm::Tool;
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -17,9 +18,9 @@ pub enum PermissionMode {
 impl PermissionMode {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::ReadOnly => "只读",
-            Self::Editable => "可编辑",
-            Self::Full => "全权限",
+            Self::ReadOnly => tr("只读"),
+            Self::Editable => tr("可编辑"),
+            Self::Full => tr("全权限"),
         }
     }
 }
@@ -29,13 +30,13 @@ pub fn tool_definitions() -> Vec<Tool> {
     vec![
         Tool {
             name: "read_file".to_string(),
-            description: "读取文件内容".to_string(),
+            description: tr("读取文件内容").to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "相对于工作目录或绝对路径"
+                        "description": tr("相对于工作目录或绝对路径")
                     }
                 },
                 "required": ["path"]
@@ -43,13 +44,13 @@ pub fn tool_definitions() -> Vec<Tool> {
         },
         Tool {
             name: "list_dir".to_string(),
-            description: "列出目录内容".to_string(),
+            description: tr("列出目录内容").to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "相对于工作目录或绝对路径，默认为 ."
+                        "description": tr("相对于工作目录或绝对路径，默认为 .")
                     }
                 },
                 "required": []
@@ -57,17 +58,17 @@ pub fn tool_definitions() -> Vec<Tool> {
         },
         Tool {
             name: "write_file".to_string(),
-            description: "写入或创建文件".to_string(),
+            description: tr("写入或创建文件").to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "相对于工作目录或绝对路径"
+                        "description": tr("相对于工作目录或绝对路径")
                     },
                     "content": {
                         "type": "string",
-                        "description": "文件内容"
+                        "description": tr("文件内容")
                     }
                 },
                 "required": ["path", "content"]
@@ -75,21 +76,21 @@ pub fn tool_definitions() -> Vec<Tool> {
         },
         Tool {
             name: "edit_file".to_string(),
-            description: "编辑文件：查找并替换字符串".to_string(),
+            description: tr("编辑文件：查找并替换字符串").to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "相对于工作目录或绝对路径"
+                        "description": tr("相对于工作目录或绝对路径")
                     },
                     "old_str": {
                         "type": "string",
-                        "description": "要查找的原始字符串（必须精确匹配一处）"
+                        "description": tr("要查找的原始字符串（必须精确匹配一处）")
                     },
                     "new_str": {
                         "type": "string",
-                        "description": "替换为此内容"
+                        "description": tr("替换为此内容")
                     }
                 },
                 "required": ["path", "old_str", "new_str"]
@@ -97,19 +98,19 @@ pub fn tool_definitions() -> Vec<Tool> {
         },
         Tool {
             name: "run_command".to_string(),
-            description: "执行终端命令。只读 / 可编辑模式下仅允许查看类命令                 （rg、grep、find、fd、ls、tree、cat、head、tail、wc、diff、jq、                 git log/diff/show/status/blame 等），不能跑 python、sed、awk；                 full 模式下可执行任意命令（删除命令除外）"
+            description: tr("执行终端命令。只读 / 可编辑模式下仅允许查看类命令                 （rg、grep、find、fd、ls、tree、cat、head、tail、wc、diff、jq、                 git log/diff/show/status/blame 等），不能跑 python、sed、awk；                 full 模式下可执行任意命令（删除命令除外）")
                 .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "cmd": {
                         "type": "string",
-                        "description": "命令名（如 ls, git 等）"
+                        "description": tr("命令名（如 ls, git 等）")
                     },
                     "args": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "命令参数"
+                        "description": tr("命令参数")
                     }
                 },
                 "required": ["cmd"]
@@ -122,7 +123,7 @@ pub fn tool_definitions() -> Vec<Tool> {
 pub fn execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> String {
     match _execute_tool(name, args_json, mode) {
         Ok(result) => result.to_string(),
-        Err(e) => format!("错误：{e:#}"),
+        Err(e) => pick(format!("错误：{e:#}"), format!("Error: {e:#}")),
     }
 }
 
@@ -130,11 +131,16 @@ fn _execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Result<V
     match name {
         "read_file" => {
             let args: serde_json::Map<String, Value> =
-                serde_json::from_str(args_json).map_err(|e| anyhow!("参数格式错误：{e}"))?;
+                serde_json::from_str(args_json).map_err(|e| {
+                    anyhow!(
+                        "{}",
+                        pick(format!("参数格式错误：{e}"), format!("Bad arguments: {e}"))
+                    )
+                })?;
             let path = args
                 .get("path")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow!("缺少 path 参数"))?;
+                .ok_or_else(|| anyhow!("{}", tr("缺少 path 参数")))?;
             read_file(path)
         }
         "list_dir" => {
@@ -145,47 +151,62 @@ fn _execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Result<V
         }
         "write_file" => {
             if matches!(mode, PermissionMode::ReadOnly) {
-                bail!("权限不足：不允许写文件")
+                bail!("{}", tr("权限不足：不允许写文件"))
             }
             let args: serde_json::Map<String, Value> =
-                serde_json::from_str(args_json).map_err(|e| anyhow!("参数格式错误：{e}"))?;
+                serde_json::from_str(args_json).map_err(|e| {
+                    anyhow!(
+                        "{}",
+                        pick(format!("参数格式错误：{e}"), format!("Bad arguments: {e}"))
+                    )
+                })?;
             let path = args
                 .get("path")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow!("缺少 path 参数"))?;
+                .ok_or_else(|| anyhow!("{}", tr("缺少 path 参数")))?;
             let content = args
                 .get("content")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow!("缺少 content 参数"))?;
+                .ok_or_else(|| anyhow!("{}", tr("缺少 content 参数")))?;
             write_file(path, content)
         }
         "edit_file" => {
             if matches!(mode, PermissionMode::ReadOnly) {
-                bail!("权限不足：不允许编辑文件")
+                bail!("{}", tr("权限不足：不允许编辑文件"))
             }
             let args: serde_json::Map<String, Value> =
-                serde_json::from_str(args_json).map_err(|e| anyhow!("参数格式错误：{e}"))?;
+                serde_json::from_str(args_json).map_err(|e| {
+                    anyhow!(
+                        "{}",
+                        pick(format!("参数格式错误：{e}"), format!("Bad arguments: {e}"))
+                    )
+                })?;
             let path = args
                 .get("path")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow!("缺少 path 参数"))?;
+                .ok_or_else(|| anyhow!("{}", tr("缺少 path 参数")))?;
             let old = args
                 .get("old_str")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow!("缺少 old_str 参数"))?;
+                .ok_or_else(|| anyhow!("{}", tr("缺少 old_str 参数")))?;
             let new = args
                 .get("new_str")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow!("缺少 new_str 参数"))?;
+                .ok_or_else(|| anyhow!("{}", tr("缺少 new_str 参数")))?;
             edit_file(path, old, new)
         }
         "run_command" => {
             let args: serde_json::Map<String, Value> =
-                serde_json::from_str(args_json).map_err(|e| anyhow!("参数格式错误：{e}"))?;
+                serde_json::from_str(args_json).map_err(|e| {
+                    anyhow!(
+                        "{}",
+                        pick(format!("参数格式错误：{e}"), format!("Bad arguments: {e}"))
+                    )
+                })?;
             let cmd = args
                 .get("cmd")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow!("缺少 cmd 参数"))?;
+                .ok_or_else(|| anyhow!("{}", tr("缺少 cmd 参数")))?;
             let cmd_args: Vec<&str> = args
                 .get("args")
                 .and_then(|v| v.as_array())
@@ -197,21 +218,33 @@ fn _execute_tool(name: &str, args_json: &str, mode: &PermissionMode) -> Result<V
             // 几百个文件的项目，几十轮都读不完，然后撞上限。
             if !matches!(mode, PermissionMode::Full) && !is_read_only_command(cmd, &cmd_args) {
                 bail!(
-                    "权限不足：{} 模式只允许查看类命令（rg / find / ls / cat / head / tail / \
+                    "{}",
+                    pick(
+                        format!(
+                            "权限不足：{} 模式只允许查看类命令（rg / find / ls / cat / head / tail / \
                      git log 等）。找文件用 `rg --files` 或 `find . -name \"*.ts\"`，\
                      搜内容用 `rg -n 模式 路径`；确实要执行其他命令，\
                      请让用户 `/config set permission_mode full`",
-                    mode.label()
+                            mode.label()
+                        ),
+                        format!(
+                            "Permission denied: {} mode only allows inspection commands (rg / find / ls / cat / head / tail / git log, …). Find files with `rg --files` or `find . -name \"*.ts\"`, search content with `rg -n pattern path`; to run anything else, ask the user to `/config set permission_mode full`",
+                            mode.label()
+                        )
+                    )
                 )
             }
 
             // 检查删除命令
             if is_delete_command(cmd, &cmd_args) {
-                bail!("删除命令需要用户确认（当前不支持自动执行）")
+                bail!("{}", tr("删除命令需要用户确认（当前不支持自动执行）"))
             }
             run_command(cmd, &cmd_args)
         }
-        _ => bail!("未知工具：{name}"),
+        _ => bail!(
+            "{}",
+            pick(format!("未知工具：{name}"), format!("Unknown tool: {name}"))
+        ),
     }
 }
 
@@ -257,8 +290,17 @@ fn edit_file(path: &str, old: &str, new: &str) -> Result<Value> {
     let mut content = std::fs::read_to_string(path)?;
     if content.matches(old).count() != 1 {
         bail!(
-            "找不到唯一匹配的字符串（找到 {} 处）",
-            content.matches(old).count()
+            "{}",
+            pick(
+                format!(
+                    "找不到唯一匹配的字符串（找到 {} 处）",
+                    content.matches(old).count()
+                ),
+                format!(
+                    "No unique match for that string ({} matches)",
+                    content.matches(old).count()
+                )
+            )
         )
     }
     content = content.replacen(old, new, 1);

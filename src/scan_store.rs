@@ -8,6 +8,7 @@
 //! 还是不是扫描时那个」，不用于任何安全判定。
 
 use crate::finding::Finding;
+use crate::i18n::{pick, tr};
 use crate::scan_ai::Judgement;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -116,13 +117,27 @@ impl ScanStore {
 
     /// 存档并顺手清理旧记录，返回写到哪里了
     pub fn save(&self, scan: &StoredScan) -> Result<PathBuf> {
-        fs::create_dir_all(&self.dir)
-            .with_context(|| format!("创建扫描目录失败：{}", self.dir.display()))?;
+        fs::create_dir_all(&self.dir).with_context(|| {
+            pick(
+                format!("创建扫描目录失败：{}", self.dir.display()),
+                format!("Creating the scan directory failed: {}", self.dir.display()),
+            )
+        })?;
         let path = self.file(&scan.id);
-        let text = serde_json::to_string_pretty(scan).context("序列化扫描结果失败")?;
+        let text = serde_json::to_string_pretty(scan).context(tr("序列化扫描结果失败"))?;
         let tmp = self.dir.join(format!("{}.json.tmp", scan.id));
-        fs::write(&tmp, text).with_context(|| format!("写入失败：{}", tmp.display()))?;
-        fs::rename(&tmp, &path).with_context(|| format!("保存失败：{}", path.display()))?;
+        fs::write(&tmp, text).with_context(|| {
+            pick(
+                format!("写入失败：{}", tmp.display()),
+                format!("Write failed: {}", tmp.display()),
+            )
+        })?;
+        fs::rename(&tmp, &path).with_context(|| {
+            pick(
+                format!("保存失败：{}", path.display()),
+                format!("Save failed: {}", path.display()),
+            )
+        })?;
         let _ = self.prune(Path::new(&scan.root), KEEP_PER_ROOT);
         Ok(path)
     }
@@ -186,7 +201,7 @@ impl ScanStore {
         let dir = match fs::read_dir(&self.dir) {
             Ok(d) => d,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e).context("读取扫描目录失败"),
+            Err(e) => return Err(e).context(tr("读取扫描目录失败")),
         };
         let mut out = Vec::new();
         for entry in dir.flatten() {

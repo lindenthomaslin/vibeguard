@@ -15,6 +15,7 @@ use crate::commands::{display_value, env_override, source_label};
 use crate::config::{self, Thinking, mask_key};
 use crate::finding::{Finding, Fix};
 use crate::graphics::Graphics;
+use crate::i18n::{pick, tr};
 use crate::llm::{ChatOptions, ChatResponse, LlmClient, Message, Role, StreamEvent};
 use crate::mode::Mode;
 use crate::sessions::{Conversation, Store, format_ago};
@@ -332,7 +333,7 @@ impl Session<'_> {
         let input_active = self.state.input_active();
         // 逐条确认时任务停在等答复上，说「等待响应」会让人以为在等网络
         let busy = if self.state.is_confirming() {
-            Some("等你确认…".to_string())
+            Some(tr("等你确认…").to_string())
         } else {
             self.state.busy.clone()
         };
@@ -394,9 +395,10 @@ impl Session<'_> {
                 Action::SaveModel(settings) => match self.save_settings(&settings) {
                     Ok(()) => self.state.close_form(),
                     // 保存失败：表单保持打开，已经填好的内容不会丢
-                    Err(e) => self
-                        .state
-                        .push(Entry::Error(format!("保存失败，配置文件没有改动：{e:#}"))),
+                    Err(e) => self.state.push(Entry::Error(pick(
+                        format!("保存失败，配置文件没有改动：{e:#}"),
+                        format!("Save failed, the config file is unchanged: {e:#}"),
+                    ))),
                 },
                 Action::ResumeSession(id) => {
                     if let Err(e) = self.resume(&id) {
@@ -438,9 +440,12 @@ impl Session<'_> {
             }
             Msg::Applied { req, path, ok } if req == self.req => {
                 let text = if ok {
-                    Entry::Success(format!("已写入 {path}"))
+                    Entry::Success(pick(format!("已写入 {path}"), format!("Wrote {path}")))
                 } else {
-                    Entry::Warn(format!("{path} 写入失败，原因见下面的工具返回"))
+                    Entry::Warn(pick(
+                        format!("{path} 写入失败，原因见下面的工具返回"),
+                        format!("{path} write failed; see the tool result below"),
+                    ))
                 };
                 self.state.push(text);
             }
@@ -460,17 +465,17 @@ impl Session<'_> {
                 self.finish_task();
                 if fixes.is_empty() {
                     self.state.push(Entry::Warn(
-                        "没有生成出可用的修复：模型要么没改，要么返回的内容不完整".into(),
+                        tr("没有生成出可用的修复：模型要么没改，要么返回的内容不完整").into(),
                     ));
                 } else {
                     // 计划模式或只读权限下照常给出 diff，但绝不落盘
                     let reason = if self.state.mode == Mode::Plan {
-                        Some("计划模式只读".to_string())
+                        Some(tr("计划模式只读").to_string())
                     } else if matches!(
                         self.app.effective().permission_mode,
                         crate::tools::PermissionMode::ReadOnly
                     ) {
-                        Some("权限模式是 readonly".to_string())
+                        Some(tr("权限模式是 readonly").to_string())
                     } else {
                         None
                     };
@@ -503,11 +508,15 @@ impl Session<'_> {
                         .take(3)
                         .map(String::as_str)
                         .collect();
-                    self.state.push(Entry::Warn(format!(
+                    self.state.push(Entry::Warn(pick(format!(
                         "{} 条判定的证据核实不了，已剔除（{}）",
                         self.state.unverified.len(),
                         shown.join("；")
-                    )));
+                    ), format!(
+                        "{} verdicts could not be verified against the code and were dropped ({})",
+                        self.state.unverified.len(),
+                        shown.join("；")
+                    ))));
                 }
                 self.state.judgements = judgements.clone();
                 self.state.failed_batches = failed.clone();
@@ -616,9 +625,14 @@ impl Session<'_> {
             let result: Result<(ChatResponse, Duration, Option<String>)> = loop {
                 rounds += 1;
                 if rounds > max_rounds {
-                    let note = format!(
-                        "这一轮已经调用工具 {max_rounds} 次，先停在这里。\
+                    let note = pick(
+                        format!(
+                            "这一轮已经调用工具 {max_rounds} 次，先停在这里。\
                          接着说「继续」我就往下做，或者 `/config set max_tool_rounds 300` 调高上限"
+                        ),
+                        format!(
+                            "This round already made {max_rounds} tool calls, so I am stopping here. Say \"continue\" and I will carry on, or raise the limit with `/config set max_tool_rounds 300`"
+                        ),
                     );
                     break Ok((
                         ChatResponse {
@@ -649,10 +663,13 @@ impl Session<'_> {
                                 reason,
                             } => events.send(Msg::Retry(
                                 req,
-                                format!(
+                                pick(format!(
                                     "请求失败，{:.1}s 后第 {attempt} 次重试：{reason}",
                                     delay.as_secs_f64()
-                                ),
+                                ), format!(
+                                    "Request failed, retrying in {:.1}s (attempt {attempt}): {reason}",
+                                    delay.as_secs_f64()
+                                )),
                             )),
                         };
                     })
@@ -689,15 +706,18 @@ impl Session<'_> {
                             if is_write && mode == Mode::Plan {
                                 messages.push(Message::tool_result(
                                     call.id.clone(),
-                                    "计划模式下不能修改文件：请把修复建议写进报告，\
-                                     由用户切换到逐条确认或全自动模式后再动手。"
-                                        .to_string(),
+                                    tr("计划模式下不能修改文件：请把修复建议写进报告，\
+                                     由用户切换到逐条确认或全自动模式后再动手。")
+                                    .to_string(),
                                 ));
                                 // 挡回去这件事要让用户看见，否则模型反复尝试时屏幕是静的
                                 let _ = events.send(Msg::Tool {
                                     req,
                                     name: label,
-                                    detail: format!("{detail}（计划模式，已挡回）"),
+                                    detail: pick(
+                                        format!("{detail}（计划模式，已挡回）"),
+                                        format!("{detail} (plan mode, blocked)"),
+                                    ),
                                     ok: false,
                                 });
                                 continue;
@@ -721,13 +741,16 @@ impl Session<'_> {
                                 if !verdict.await.unwrap_or(false) {
                                     messages.push(Message::tool_result(
                                         call.id.clone(),
-                                        "用户拒绝了这个改动。不要重试，继续处理下一个问题。"
+                                        tr("用户拒绝了这个改动。不要重试，继续处理下一个问题。")
                                             .to_string(),
                                     ));
                                     let _ = events.send(Msg::Tool {
                                         req,
                                         name: label,
-                                        detail: format!("{detail}（你拒绝了）"),
+                                        detail: pick(
+                                            format!("{detail}（你拒绝了）"),
+                                            format!("{detail} (you declined)"),
+                                        ),
                                         ok: false,
                                     });
                                     continue;
@@ -744,27 +767,27 @@ impl Session<'_> {
 
                             let mut tool_result =
                                 crate::tools::execute_tool(tool_name, tool_args, &perm);
-                            let denied = tool_result.starts_with("错误：权限不足");
+                            let denied = tool_result.starts_with(tr("错误：权限不足"));
                             // plan 是硬性只读，和 permission_mode 无关。不把这一点说清楚，
                             // 用户会以为「我明明把权限设成 full 了」
                             if denied && mode == Mode::Plan {
                                 // 整段换掉而不是追加：原话里的「改成 full」在 plan 下是错建议，
                                 // 模型会把两条都念给用户，越说越乱
-                                tool_result = "错误：当前工作模式是 plan，它强制只读，\
+                                tool_result = tr("错误：当前工作模式是 plan，它强制只读，\
                                      改 permission_mode 不会生效。要执行这类命令，\
                                      需要用户按 Shift-Tab 切到 confirm 或 auto；\
-                                     只想看代码的话用 rg / find / cat。"
-                                    .to_string();
+                                     只想看代码的话用 rg / find / cat。")
+                                .to_string();
                             }
-                            let ok = !tool_result.starts_with("错误");
+                            let ok = !tool_result.starts_with(tr("错误"));
                             if !ok {
                                 // 界面上一句话就够，完整原因在工具返回里给模型看
                                 let detail = if denied {
                                     if mode == Mode::Plan {
-                                        "plan 模式强制只读 · Shift-Tab 切到 confirm/auto"
+                                        tr("plan 模式强制只读 · Shift-Tab 切到 confirm/auto")
                                             .to_string()
                                     } else {
-                                        "permission_mode 是 readonly · 用 /config set 改成 full"
+                                        tr("permission_mode 是 readonly · 用 /config set 改成 full")
                                             .to_string()
                                     }
                                 } else {
@@ -772,7 +795,10 @@ impl Session<'_> {
                                 };
                                 let _ = events.send(Msg::Tool {
                                     req,
-                                    name: format!("{label} 被拒绝"),
+                                    name: pick(
+                                        format!("{label} 被拒绝"),
+                                        format!("{label} declined"),
+                                    ),
                                     detail,
                                     ok: false,
                                 });
@@ -802,9 +828,14 @@ impl Session<'_> {
                             break Ok((
                                 res,
                                 start.elapsed(),
-                                Some(format!(
-                                    "模型连着 {repeats} 次用同样的参数调用同一个工具，\
+                                Some(pick(
+                                    format!(
+                                        "模型连着 {repeats} 次用同样的参数调用同一个工具，\
                                      判断为原地打转，先停下来。换个说法，或者 /scan 看看现状"
+                                    ),
+                                    format!(
+                                        "The model called the same tool with the same arguments {repeats} times in a row, which looks like spinning in place, so I am stopping. Rephrase, or run /scan to see where things stand"
+                                    ),
                                 )),
                             ));
                         }
@@ -852,7 +883,7 @@ impl Session<'_> {
             Ok(done) => {
                 if done.res.is_truncated() {
                     self.state
-                        .push(Entry::Warn("回答达到 max_tokens 上限被截断".into()));
+                        .push(Entry::Warn(tr("回答达到 max_tokens 上限被截断").into()));
                 }
                 // 提前停下（轮数用尽 / 原地打转）不是错误，但必须说清楚，
                 // 否则用户会以为「它就干到这里为止」
@@ -868,7 +899,10 @@ impl Session<'_> {
                     self.conv
                         .push_exchange(&user, &done.res.content, now_secs());
                     if let Err(e) = self.store.save(&self.conv) {
-                        self.state.push(Entry::Warn(format!("对话保存失败：{e:#}")));
+                        self.state.push(Entry::Warn(pick(
+                            format!("对话保存失败：{e:#}"),
+                            format!("Saving the conversation failed: {e:#}"),
+                        )));
                     }
                 }
             }
@@ -893,11 +927,13 @@ impl Session<'_> {
     /// 打开 `/model` 表单。初始值取自配置文件，而不是环境变量覆盖后的值，
     /// 否则一保存就会把环境变量里的 Key 写进文件。
     fn open_model_form(&mut self) {
-        for (key, label) in ENV_FIELDS {
+        for (key, label) in ENV_FIELDS.map(|(k, l)| (k, tr(l))) {
             if let Some(name) = env_override(key) {
-                self.state.push(Entry::Warn(format!(
+                self.state.push(Entry::Warn(pick(format!(
                     "环境变量 {name} 已设置，会覆盖配置文件里的{label}；表单显示的是配置文件里的值"
-                )));
+                ), format!(
+                    "Env var {name} is set and overrides the {label} in the config file; the form shows the config value"
+                ))));
             }
         }
         let settings = ModelSettings::from_config(&self.app.file);
@@ -913,13 +949,16 @@ impl Session<'_> {
         self.app.overrides.model = None;
         self.app.overrides.thinking = None;
 
-        self.state.push(Entry::Success("配置已保存".into()));
+        self.state.push(Entry::Success(tr("配置已保存").into()));
         let lines = saved_lines(&ui::tilde(&self.app.config_path), settings);
         self.state.push(Entry::Block(lines));
-        for (key, label) in ENV_FIELDS {
+        for (key, label) in ENV_FIELDS.map(|(k, l)| (k, tr(l))) {
             if let Some(name) = env_override(key) {
-                self.state.push(Entry::Warn(format!(
-                    "环境变量 {name} 已设置，运行时它仍会覆盖刚保存的{label}"
+                self.state.push(Entry::Warn(pick(
+                    format!("环境变量 {name} 已设置，运行时它仍会覆盖刚保存的{label}"),
+                    format!(
+                        "Env var {name} is set and will still override the {label} you just saved"
+                    ),
                 )));
             }
         }
@@ -940,16 +979,17 @@ impl Session<'_> {
         self.set_banner(true);
         if had_messages {
             self.state.push(Entry::Success(
-                "已开始新对话，之前的对话已保存，可用 /resume 或 /sessions 找回".into(),
+                tr("已开始新对话，之前的对话已保存，可用 /resume 或 /sessions 找回").into(),
             ));
         } else {
-            self.state.push(Entry::Success("已开始新对话".into()));
+            self.state.push(Entry::Success(tr("已开始新对话").into()));
         }
     }
 
     fn resume(&mut self, id: &str) -> Result<()> {
         if id == self.conv.id {
-            self.state.push(Entry::Info("已经在这个对话里了".into()));
+            self.state
+                .push(Entry::Info(tr("已经在这个对话里了").into()));
             return Ok(());
         }
         let conv = self.store.load(id)?;
@@ -962,7 +1002,7 @@ impl Session<'_> {
             Some(conv) => self.load_conversation(conv),
             None => self
                 .state
-                .push(Entry::Info("还没有可以恢复的历史对话".into())),
+                .push(Entry::Info(tr("还没有可以恢复的历史对话").into())),
         }
         Ok(())
     }
@@ -973,11 +1013,19 @@ impl Session<'_> {
         self.last_usage.clear();
         // 已经有内容了，不再显示启动画面
         self.set_banner(false);
-        self.state.push(Entry::Info(format!(
-            "已恢复对话「{}」· {} 轮 · {}",
-            conv.title,
-            conv.turns(),
-            format_ago(conv.updated, now_secs())
+        self.state.push(Entry::Info(pick(
+            format!(
+                "已恢复对话「{}」· {} 轮 · {}",
+                conv.title,
+                conv.turns(),
+                format_ago(conv.updated, now_secs())
+            ),
+            format!(
+                "Resumed \"{}\" · {} rounds · {}",
+                conv.title,
+                conv.turns(),
+                format_ago(conv.updated, now_secs())
+            ),
         )));
         for m in &conv.messages {
             match m.role {
@@ -1030,12 +1078,14 @@ impl Session<'_> {
         };
         let store = crate::scan_store::ScanStore::beside_config(&self.app.config_path);
         match store.save(&scan) {
-            Ok(path) => self
-                .state
-                .push(Entry::Info(format!("结果已存档：{}", ui::tilde(&path)))),
+            Ok(path) => self.state.push(Entry::Info(pick(
+                format!("结果已存档：{}", ui::tilde(&path)),
+                format!("Results archived: {}", ui::tilde(&path)),
+            ))),
             // 存档失败不影响这次扫描，只是下次 /findings 找不回来
-            Err(e) => self.state.push(Entry::Warn(format!(
-                "存档失败（结果只在这次会话里）：{e:#}"
+            Err(e) => self.state.push(Entry::Warn(pick(
+                format!("存档失败（结果只在这次会话里）：{e:#}"),
+                format!("Archiving failed (results only live in this session): {e:#}"),
             ))),
         }
     }
@@ -1047,13 +1097,31 @@ impl Session<'_> {
             let others = store.list().map(|v| v.len()).unwrap_or(0);
             if others > 0 {
                 bail!(
-                    "这个目录还没有扫描记录：{}（存档里有 {others} 条其他目录的记录）",
-                    ui::tilde(self.scan_root.as_path())
+                    "{}",
+                    pick(
+                        format!(
+                            "这个目录还没有扫描记录：{}（存档里有 {others} 条其他目录的记录）",
+                            ui::tilde(self.scan_root.as_path())
+                        ),
+                        format!(
+                            "No scan record for this directory: {} (the archive has {others} records for other directories)",
+                            ui::tilde(self.scan_root.as_path())
+                        )
+                    )
                 );
             }
             bail!(
-                "还没有任何扫描记录：{}",
-                ui::tilde(self.scan_root.as_path())
+                "{}",
+                pick(
+                    format!(
+                        "还没有任何扫描记录：{}",
+                        ui::tilde(self.scan_root.as_path())
+                    ),
+                    format!(
+                        "No scan records yet: {}",
+                        ui::tilde(self.scan_root.as_path())
+                    )
+                )
             );
         };
 
@@ -1070,10 +1138,17 @@ impl Session<'_> {
         self.scan_id = Some(scan.id.clone());
         self.scan_started = scan.created;
 
-        self.state.push(Entry::Info(format!(
-            "载入 {ago}的扫描结果（{}）· 共 {} 个问题",
-            ui::tilde(self.scan_root.as_path()),
-            scan.findings.len()
+        self.state.push(Entry::Info(pick(
+            format!(
+                "载入 {ago}的扫描结果（{}）· 共 {} 个问题",
+                ui::tilde(self.scan_root.as_path()),
+                scan.findings.len()
+            ),
+            format!(
+                "Loading the scan from {ago} ({}) · {} issues",
+                ui::tilde(self.scan_root.as_path()),
+                scan.findings.len()
+            ),
         )));
 
         // 把结果按「一次扫描」的样子重新画一遍
@@ -1097,19 +1172,31 @@ impl Session<'_> {
         let stale = scan.stale_files(&self.scan_root);
         if stale.is_empty() {
             self.state
-                .push(Entry::Info("文件都没变，可以直接 /fix".into()));
+                .push(Entry::Info(tr("文件都没变，可以直接 /fix").into()));
         } else {
             let shown: Vec<&str> = stale.iter().take(5).map(String::as_str).collect();
             let more = stale.len().saturating_sub(shown.len());
-            self.state.push(Entry::Warn(format!(
-                "有 {} 个文件在扫描后改过（{}{}）：相关发现可能过期，/fix 会跳过它们",
-                stale.len(),
-                shown.join("、"),
-                if more > 0 {
-                    format!(" 等 {more} 个")
-                } else {
-                    String::new()
-                }
+            self.state.push(Entry::Warn(pick(
+                format!(
+                    "有 {} 个文件在扫描后改过（{}{}）：相关发现可能过期，/fix 会跳过它们",
+                    stale.len(),
+                    shown.join("、"),
+                    if more > 0 {
+                        pick(format!(" 等 {more} 个"), format!(" and {more} more"))
+                    } else {
+                        String::new()
+                    }
+                ),
+                format!(
+                    "{} files changed since the scan ({}{}): related findings may be stale, /fix will skip them",
+                    stale.len(),
+                    shown.join("、"),
+                    if more > 0 {
+                        pick(format!(" 等 {more} 个"), format!(" and {more} more"))
+                    } else {
+                        String::new()
+                    }
+                ),
             )));
         }
         Ok(())
@@ -1121,7 +1208,7 @@ impl Session<'_> {
     /// 传路径时按「去掉扩展名的主干」处理，两份都写在它旁边。
     fn write_report(&mut self, args: &[&str]) -> Result<()> {
         if self.state.findings.is_empty() && self.state.judgements.is_empty() {
-            bail!("还没有扫描结果，先跑 /scan 或 /scan --ai");
+            bail!("{}", tr("还没有扫描结果，先跑 /scan 或 /scan --ai"));
         }
         let base = match args.first() {
             Some(p) => {
@@ -1132,8 +1219,12 @@ impl Session<'_> {
             None => self.scan_root.join("vibeguard-report"),
         };
         if let Some(dir) = base.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir)
-                .with_context(|| format!("创建目录失败：{}", dir.display()))?;
+            std::fs::create_dir_all(dir).with_context(|| {
+                pick(
+                    format!("创建目录失败：{}", dir.display()),
+                    format!("Creating the directory failed: {}", dir.display()),
+                )
+            })?;
         }
 
         let meta = crate::report::Meta {
@@ -1152,9 +1243,18 @@ impl Session<'_> {
 
         let md_path = base.with_extension("md");
         let json_path = base.with_extension("json");
-        std::fs::write(&md_path, md).with_context(|| format!("写入失败：{}", md_path.display()))?;
-        std::fs::write(&json_path, js)
-            .with_context(|| format!("写入失败：{}", json_path.display()))?;
+        std::fs::write(&md_path, md).with_context(|| {
+            pick(
+                format!("写入失败：{}", md_path.display()),
+                format!("Write failed: {}", md_path.display()),
+            )
+        })?;
+        std::fs::write(&json_path, js).with_context(|| {
+            pick(
+                format!("写入失败：{}", json_path.display()),
+                format!("Write failed: {}", json_path.display()),
+            )
+        })?;
 
         self.state.push(Entry::Success(crate::i18n::pick(
             format!(
@@ -1174,11 +1274,15 @@ impl Session<'_> {
         )));
         // 空报告最容易骗人，这里再说一遍覆盖了多少
         if self.state.findings.is_empty() {
-            self.state.push(Entry::Warn(format!(
+            self.state.push(Entry::Warn(pick(format!(
                 "这份报告是「没发现问题」，不是「没有问题」——它只看了清单里的 {}/{} 条",
                 (meta.local_rules + self.state.judgements.len()).min(meta.checklist_total),
                 meta.checklist_total
-            )));
+            ), format!(
+                "This report says \"nothing found\", not \"nothing wrong\" — it only covered {}/{} checklist items",
+                (meta.local_rules + self.state.judgements.len()).min(meta.checklist_total),
+                meta.checklist_total
+            ))));
         }
         Ok(())
     }
@@ -1198,7 +1302,7 @@ impl Session<'_> {
             );
         }
         if self.state.findings.is_empty() {
-            bail!("还没有扫描结果，先跑 /scan 或 /scan --ai");
+            bail!("{}", tr("还没有扫描结果，先跑 /scan 或 /scan --ai"));
         }
         // 只读时仍然生成 diff（看方案本身有价值），但不会落盘——
         // 真正的拦截在 apply_fixes 之前：answer_review 直接返回 None
@@ -1208,7 +1312,7 @@ impl Session<'_> {
         );
         if readonly || self.state.mode == Mode::Plan {
             self.state.push(Entry::Info(
-                "当前是计划模式 / 只读权限：会给出修复方案，但不会写入文件".into(),
+                tr("当前是计划模式 / 只读权限：会给出修复方案，但不会写入文件").into(),
             ));
         }
 
@@ -1245,24 +1349,37 @@ impl Session<'_> {
         }
         if picked.is_empty() {
             if stale > 0 {
-                bail!("{stale} 条发现所在的文件在扫描后改过，行号可能已经不对了：先重扫再修");
+                bail!(
+                    "{}",
+                    pick(
+                        format!(
+                            "{stale} 条发现所在的文件在扫描后改过，行号可能已经不对了：先重扫再修"
+                        ),
+                        format!(
+                            "{stale} findings live in files changed since the scan, so line numbers may be stale: rescan first"
+                        )
+                    )
+                );
             }
-            bail!("没有可以修的发现（文件不存在，或者编号对不上）");
+            bail!("{}", tr("没有可以修的发现（文件不存在，或者编号对不上）"));
         }
         if stale > 0 {
-            self.state.push(Entry::Warn(format!(
+            self.state.push(Entry::Warn(pick(format!(
                 "跳过 {stale} 条：文件在扫描后改过，先重扫这些文件再修"
-            )));
+            ), format!(
+                "Skipping {stale} findings: their files changed since the scan, rescan them before fixing"
+            ))));
         }
 
-        let client = LlmClient::new(&self.app.effective()).context("无法创建模型客户端")?;
+        let client = LlmClient::new(&self.app.effective()).context(tr("无法创建模型客户端"))?;
         let req = self.next_req();
         let tx = self.tx.clone();
         let root = self.scan_root.clone();
         let total = picked.len();
-        self.state.busy = Some("生成修复中…".into());
-        self.state.push(Entry::Info(format!(
-            "正在为 {total} 个问题生成修复（每个问题一次请求，不会写文件）…"
+        self.state.busy = Some(tr("生成修复中…").into());
+        self.state.push(Entry::Info(pick(
+            format!("正在为 {total} 个问题生成修复（每个问题一次请求，不会写文件）…"),
+            format!("Generating fixes for {total} issues (one request each, nothing is written)…"),
         )));
 
         self.task = Some(tokio::spawn(async move {
@@ -1271,13 +1388,23 @@ impl Session<'_> {
             for (i, finding) in picked.into_iter().enumerate() {
                 let _ = tx.send(Msg::FixProgress(
                     req,
-                    format!(
-                        "修复 {}/{}：{} · {}:{}",
-                        i + 1,
-                        total,
-                        finding.title,
-                        finding.file,
-                        finding.line
+                    pick(
+                        format!(
+                            "修复 {}/{}：{} · {}:{}",
+                            i + 1,
+                            total,
+                            finding.title,
+                            finding.file,
+                            finding.line
+                        ),
+                        format!(
+                            "Fixing {}/{}: {} · {}:{}",
+                            i + 1,
+                            total,
+                            finding.title,
+                            finding.file,
+                            finding.line
+                        ),
                     ),
                 ));
                 let path = root.join(&finding.file);
@@ -1287,7 +1414,14 @@ impl Session<'_> {
                 if old.len() > 120_000 {
                     let _ = tx.send(Msg::FixProgress(
                         req,
-                        format!("跳过 {}：文件太大（{} 字节）", finding.file, old.len()),
+                        pick(
+                            format!("跳过 {}：文件太大（{} 字节）", finding.file, old.len()),
+                            format!(
+                                "Skipping {}: file too large ({} bytes)",
+                                finding.file,
+                                old.len()
+                            ),
+                        ),
                     ));
                     continue;
                 }
@@ -1307,18 +1441,25 @@ impl Session<'_> {
                 if new.trim() == old.trim() {
                     let _ = tx.send(Msg::FixProgress(
                         req,
-                        format!("跳过 {}：模型没改动任何内容", finding.file),
+                        pick(
+                            format!("跳过 {}：模型没改动任何内容", finding.file),
+                            format!("Skipping {}: the model changed nothing", finding.file),
+                        ),
                     ));
                     continue;
                 }
                 if new.len() * 10 < old.len() * 6 {
                     let _ = tx.send(Msg::FixProgress(
                         req,
-                        format!(
+                        pick(format!(
                             "跳过 {}：返回的内容只有原文的 {}%，像是被截断了",
                             finding.file,
                             new.len() * 100 / old.len().max(1)
-                        ),
+                        ), format!(
+                            "Skipping {}: the returned content is only {}% of the original, so it looks truncated",
+                            finding.file,
+                            new.len() * 100 / old.len().max(1)
+                        )),
                     ));
                     continue;
                 }
@@ -1344,22 +1485,33 @@ impl Session<'_> {
             let path = self.scan_root.join(&fix.file);
             match std::fs::read_to_string(&path) {
                 Ok(current) if current != fix.old => {
-                    problems.push(format!("{} 在确认期间被改过，已跳过", fix.file));
+                    problems.push(pick(
+                        format!("{} 在确认期间被改过，已跳过", fix.file),
+                        format!("{} changed while you were confirming, skipped", fix.file),
+                    ));
                     continue;
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    problems.push(format!("{} 读不出来：{e}", fix.file));
+                    problems.push(pick(
+                        format!("{} 读不出来：{e}", fix.file),
+                        format!("{} cannot be read: {e}", fix.file),
+                    ));
                     continue;
                 }
             }
             match std::fs::write(&path, &fix.new) {
                 Ok(()) => {
                     written += 1;
-                    self.state
-                        .push(Entry::Success(format!("已修复 {}", fix.file)));
+                    self.state.push(Entry::Success(pick(
+                        format!("已修复 {}", fix.file),
+                        format!("Fixed {}", fix.file),
+                    )));
                 }
-                Err(e) => problems.push(format!("{} 写入失败：{e}", fix.file)),
+                Err(e) => problems.push(pick(
+                    format!("{} 写入失败：{e}", fix.file),
+                    format!("{} write failed: {e}", fix.file),
+                )),
             }
         }
         // 写过的文件里，剩下的发现也一并作废：我们自己的改动同样会让行号漂移，
@@ -1371,14 +1523,19 @@ impl Session<'_> {
             .retain(|f| !touched.contains(&f.file.as_str()));
         let dropped = before - self.state.findings.len();
         if written > 0 {
-            self.state
-                .push(Entry::Success(format!("共写入 {written} 个文件")));
+            self.state.push(Entry::Success(pick(
+                format!("共写入 {written} 个文件"),
+                format!("wrote {written} files"),
+            )));
         }
         if dropped > written {
-            self.state.push(Entry::Info(format!(
+            self.state.push(Entry::Info(pick(format!(
                 "这些文件里另有 {} 条发现已作废（改动会让行号漂移），建议重新扫一次",
                 dropped - written
-            )));
+            ), format!(
+                "Another {} findings in these files are now void (edits shift line numbers); rescanning is recommended",
+                dropped - written
+            ))));
         }
         for p in problems {
             self.state.push(Entry::Warn(p));
@@ -1411,11 +1568,17 @@ impl Session<'_> {
             None => std::env::current_dir()?,
         };
         if !root.is_dir() {
-            bail!("不是一个目录：{}", root.display());
+            bail!(
+                "{}",
+                pick(
+                    format!("不是一个目录：{}", root.display()),
+                    format!("not a directory: {}", root.display())
+                )
+            );
         }
         // 第二段要烧 token，先把客户端建好：配置不对就当场说，别等扫完了才报错
         let client = if with_ai {
-            Some(LlmClient::new(&self.app.effective()).context("无法创建模型客户端")?)
+            Some(LlmClient::new(&self.app.effective()).context(tr("无法创建模型客户端"))?)
         } else {
             None
         };
@@ -1484,7 +1647,7 @@ impl Session<'_> {
             else {
                 let _ = tx.send(Msg::ScanProgress(
                     req,
-                    "建立仓库索引失败，跳过模型判定".into(),
+                    tr("建立仓库索引失败，跳过模型判定").into(),
                 ));
                 return;
             };
@@ -1561,7 +1724,7 @@ impl Session<'_> {
             if incremental {
                 let _ = tx.send(Msg::ScanProgress(
                     req,
-                    format!(
+                    pick(format!(
                         "有 {} 个文件变过，只把它们重新交给模型（其余文件沿用上次结论）：{}",
                         changed.len(),
                         changed
@@ -1570,7 +1733,16 @@ impl Session<'_> {
                             .cloned()
                             .collect::<Vec<_>>()
                             .join("、")
-                    ),
+                    ), format!(
+                        "{} files changed; only those go back to the model (the rest keep their previous verdicts): {}",
+                        changed.len(),
+                        changed
+                            .iter()
+                            .take(3)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join("、")
+                    )),
                 ));
             }
 
@@ -1664,7 +1836,10 @@ impl Session<'_> {
                 let label = batch.label.clone();
                 match batch.split() {
                     Some((a, b)) => halves.extend([a, b]),
-                    None => failed.push(format!("{label}（只有一条，返回的 JSON 不完整）")),
+                    None => failed.push(pick(
+                        format!("{label}（只有一条，返回的 JSON 不完整）"),
+                        format!("{label} (single item, returned incomplete JSON)"),
+                    )),
                 }
             }
             let retried = futures_util::stream::iter(halves)
@@ -1675,7 +1850,14 @@ impl Session<'_> {
                     async move {
                         let _ = tx.send(Msg::ScanProgress(
                             req,
-                            format!("重试（拆半）：{}（{} 条）", half.label, half.items.len()),
+                            pick(
+                                format!("重试（拆半）：{}（{} 条）", half.label, half.items.len()),
+                                format!(
+                                    "Retry (split): {} ({} items)",
+                                    half.label,
+                                    half.items.len()
+                                ),
+                            ),
                         ));
                         let messages = [Message::user(crate::scan_ai::prompt(&half, &index))];
                         let opts = ChatOptions {
@@ -1697,11 +1879,21 @@ impl Session<'_> {
                         tokens += resp.usage.as_ref().map(|u| u.total_tokens).unwrap_or(0);
                         match crate::scan_ai::parse(&resp.content) {
                             Ok(v) if !v.is_empty() => judgements.extend(v),
-                            Ok(_) => failed.push(format!("{}（拆半后仍没有判定）", half.label)),
-                            Err(e) => failed.push(format!(
-                                "{}（拆半后仍失败：{e:#}；正文 {} 字）",
-                                half.label,
-                                resp.content.chars().count()
+                            Ok(_) => failed.push(pick(
+                                format!("{}（拆半后仍没有判定）", half.label),
+                                format!("{} (no verdict even after splitting)", half.label),
+                            )),
+                            Err(e) => failed.push(pick(
+                                format!(
+                                    "{}（拆半后仍失败：{e:#}；正文 {} 字）",
+                                    half.label,
+                                    resp.content.chars().count()
+                                ),
+                                format!(
+                                    "{} (still failing after splitting: {e:#}; body {} chars)",
+                                    half.label,
+                                    resp.content.chars().count()
+                                ),
                             )),
                         }
                     }
@@ -1732,9 +1924,15 @@ impl Session<'_> {
     fn open_sessions_panel(&mut self, query: &str) -> Result<()> {
         let (entries, skipped) = self.store.catalog()?;
         if skipped > 0 {
-            self.state.push(Entry::Warn(format!(
-                "有 {skipped} 个对话文件无法读取，已跳过（{}）",
-                ui::tilde(self.store.dir())
+            self.state.push(Entry::Warn(pick(
+                format!(
+                    "有 {skipped} 个对话文件无法读取，已跳过（{}）",
+                    ui::tilde(self.store.dir())
+                ),
+                format!(
+                    "{skipped} conversation files could not be read and were skipped ({})",
+                    ui::tilde(self.store.dir())
+                ),
             )));
         }
         let now = now_secs();
@@ -1803,56 +2001,76 @@ impl Session<'_> {
                         settings.model = name.to_string();
                         self.save_settings(&settings)?;
                     }
-                    _ => bail!("用法：/model 打开配置表单，或 /model <模型名> 直接换模型"),
+                    _ => bail!(
+                        "{}",
+                        tr("用法：/model 打开配置表单，或 /model <模型名> 直接换模型")
+                    ),
                 }
             }
             "thinking" => match args.as_slice() {
-                [] => self.state.push(Entry::Info(format!(
-                    "当前思考模式：{}（/model 可以连同模型一起保存）",
-                    self.app.effective().thinking
+                [] => self.state.push(Entry::Info(pick(
+                    format!(
+                        "当前思考模式：{}（/model 可以连同模型一起保存）",
+                        self.app.effective().thinking
+                    ),
+                    format!(
+                        "Current thinking mode: {} (/model saves it along with the model)",
+                        self.app.effective().thinking
+                    ),
                 ))),
                 [mode] => {
                     let mode: Thinking = mode.parse().map_err(anyhow::Error::msg)?;
                     self.app.overrides.thinking = Some(mode);
-                    self.state
-                        .push(Entry::Success(format!("本次会话思考模式：{mode}")));
+                    self.state.push(Entry::Success(pick(
+                        format!("本次会话思考模式：{mode}"),
+                        format!("Thinking mode for this session: {mode}"),
+                    )));
                 }
-                _ => bail!("用法：/thinking [auto|off|low|high|max]"),
+                _ => bail!("{}", tr("用法：/thinking [auto|off|low|high|max]")),
             },
             "mode" => match args.as_slice() {
                 [] => self.state.push(Entry::Block(self.mode_lines())),
                 [name] => match Mode::parse(name) {
                     Some(mode) => self.state.set_mode(mode),
-                    None => bail!("模式可选值为 plan / confirm / auto"),
+                    None => bail!("{}", tr("模式可选值为 plan / confirm / auto")),
                 },
-                _ => bail!("用法：/mode [plan|confirm|auto]"),
+                _ => bail!("{}", tr("用法：/mode [plan|confirm|auto]")),
             },
             "lang" => self.set_lang(&args)?,
             "theme" => match args.as_slice() {
                 [] => self.state.push(Entry::Block(self.appearance_lines())),
                 [name] => match Theme::parse(name) {
                     Some(theme) => self.set_theme(theme),
-                    None => bail!("主题可选值为 dark / light"),
+                    None => bail!("{}", tr("主题可选值为 dark / light")),
                 },
-                _ => bail!("用法：/theme [dark|light]"),
+                _ => bail!("{}", tr("用法：/theme [dark|light]")),
             },
             "font" => match args.as_slice() {
                 [] => self.state.push(Entry::Block(self.appearance_lines())),
                 [name] => match FontStyle::parse(name) {
                     Some(font) => self.set_font(font),
-                    None => bail!("字形可选值为 default / anime"),
+                    None => bail!("{}", tr("字形可选值为 default / anime")),
                 },
-                _ => bail!("用法：/font [default|anime]"),
+                _ => bail!("{}", tr("用法：/font [default|anime]")),
             },
             "permissions" => match args.as_slice() {
                 [] => self.show_permissions(),
                 [mode] => {
                     self.set_permission_mode(mode)?;
                 }
-                _ => bail!("用法：/permissions [readonly|editable|full] [工作目录]"),
+                _ => bail!(
+                    "{}",
+                    tr("用法：/permissions [readonly|editable|full] [工作目录]")
+                ),
             },
-            "" => bail!("请输入命令，/help 查看可用命令"),
-            other => bail!("未知命令 /{other}，/help 查看可用命令"),
+            "" => bail!("{}", tr("请输入命令，/help 查看可用命令")),
+            other => bail!(
+                "{}",
+                pick(
+                    format!("未知命令 /{other}，/help 查看可用命令"),
+                    format!("Unknown command /{other}; /help lists the commands")
+                )
+            ),
         }
         Ok(())
     }
@@ -1868,19 +2086,20 @@ impl Session<'_> {
             | ["set", "base_url"]
             | ["set", "model"]
             | ["set", "thinking"] => self.open_model_form(),
-            ["set", _] => bail!("请提供 value：/config set <key> <value>"),
+            ["set", _] => bail!("{}", tr("请提供 value：/config set <key> <value>")),
             ["set", key, value @ ..] => {
                 let value = value.join(" ");
                 self.app.file.set(key, &value)?;
                 self.app.save()?;
                 let cfg = self.app.effective();
-                self.state.push(Entry::Success(format!(
-                    "已保存 {key} = {}",
-                    display_value(&self.app.file, key)
+                self.state.push(Entry::Success(pick(
+                    format!("已保存 {key} = {}", display_value(&self.app.file, key)),
+                    format!("Saved {key} = {}", display_value(&self.app.file, key)),
                 )));
                 if let Some(name) = env_override(key) {
-                    self.state.push(Entry::Warn(format!(
-                        "环境变量 {name} 已设置，它会覆盖配置文件中的 {key}"
+                    self.state.push(Entry::Warn(pick(
+                        format!("环境变量 {name} 已设置，它会覆盖配置文件中的 {key}"),
+                        format!("Env var {name} is set and overrides {key} in the config"),
                     )));
                 }
                 for w in cfg.warnings() {
@@ -1890,12 +2109,18 @@ impl Session<'_> {
             ["unset", key] => {
                 self.app.file.unset(key)?;
                 self.app.save()?;
-                self.state.push(Entry::Success(format!(
-                    "{key} 已恢复默认值：{}",
-                    display_value(&self.app.file, key)
+                self.state.push(Entry::Success(pick(
+                    format!("{key} 已恢复默认值：{}", display_value(&self.app.file, key)),
+                    format!(
+                        "{key} restored to its default: {}",
+                        display_value(&self.app.file, key)
+                    ),
                 )));
             }
-            _ => bail!("用法：/config [show|set <key> <value>|unset <key>]"),
+            _ => bail!(
+                "{}",
+                tr("用法：/config [show|set <key> <value>|unset <key>]")
+            ),
         }
         Ok(())
     }
@@ -1904,13 +2129,13 @@ impl Session<'_> {
         let dim = Style::new().add_modifier(Modifier::DIM);
         let cfg = self.app.effective();
         let mut out = vec![Line::from(vec![
-            Span::styled("配置文件 ", Style::new().add_modifier(Modifier::BOLD)),
+            Span::styled(tr("配置文件 "), Style::new().add_modifier(Modifier::BOLD)),
             Span::raw(ui::tilde(&self.app.config_path)),
             Span::styled(
                 if self.app.config_path.exists() {
                     ""
                 } else {
-                    "（尚未创建，使用默认值）"
+                    tr("（尚未创建，使用默认值）")
                 },
                 dim,
             ),
@@ -1926,7 +2151,7 @@ impl Session<'_> {
             out.push(Line::from(spans));
         }
         out.push(Line::from(vec![
-            Span::styled("  对话目录      ", dim),
+            Span::styled(tr("  对话目录      "), dim),
             Span::raw(ui::tilde(self.store.dir())),
         ]));
         out
@@ -1936,33 +2161,41 @@ impl Session<'_> {
         let cfg = self.app.effective();
         let lines = vec![
             Line::from(vec![Span::styled(
-                "权限设置",
+                tr("权限设置"),
                 Style::new().add_modifier(Modifier::BOLD),
             )]),
             Line::raw(""),
             Line::from(vec![
                 Span::styled(
-                    "  权限模式           ",
+                    tr("  权限模式           "),
                     Style::new().add_modifier(Modifier::DIM),
                 ),
                 Span::raw(cfg.permission_mode.label()),
             ]),
             Line::from(vec![
                 Span::styled(
-                    "  工作目录           ",
+                    tr("  工作目录           "),
                     Style::new().add_modifier(Modifier::DIM),
                 ),
                 Span::raw(cfg.workspace_root.as_ref().map_or_else(
-                    || "默认（启动时的当前目录）".to_string(),
+                    || tr("默认（启动时的当前目录）").to_string(),
                     |p| p.display().to_string(),
                 )),
             ]),
             Line::raw(""),
-            Line::styled("用法：", Style::new().add_modifier(Modifier::DIM)),
-            Line::raw("  /permissions readonly           只读，不能修改文件或执行命令"),
-            Line::raw("  /permissions editable           可编辑，能修改文件，不能执行命令"),
-            Line::raw("  /permissions full               全权限，能修改文件和执行命令（删除除外）"),
-            Line::raw("  /permissions <模式> <目录>      同时设置权限模式和工作目录"),
+            Line::styled(tr("用法："), Style::new().add_modifier(Modifier::DIM)),
+            Line::raw(tr(
+                "  /permissions readonly           只读，不能修改文件或执行命令",
+            )),
+            Line::raw(tr(
+                "  /permissions editable           可编辑，能修改文件，不能执行命令",
+            )),
+            Line::raw(tr(
+                "  /permissions full               全权限，能修改文件和执行命令（删除除外）",
+            )),
+            Line::raw(tr(
+                "  /permissions <模式> <目录>      同时设置权限模式和工作目录",
+            )),
         ];
         self.state.push(Entry::Block(lines));
     }
@@ -1976,20 +2209,23 @@ impl Session<'_> {
         let dim = Style::new().add_modifier(Modifier::DIM);
 
         let mut out = vec![Line::from(vec![
-            Span::styled("外观 ", Style::new().add_modifier(Modifier::BOLD)),
-            Span::raw(format!("主题 {} · 字形 {}", theme.label(), font.label())),
+            Span::styled(tr("外观 "), Style::new().add_modifier(Modifier::BOLD)),
+            Span::raw(pick(
+                format!("主题 {} · 字形 {}", theme.label(), font.label()),
+                format!("Theme {} · font {}", theme.label(), font.label()),
+            )),
         ])];
         let themes = Theme::ALL.map(|t| {
             let desc = match t {
-                Theme::Dark => "深色底，亮色字",
-                Theme::Light => "浅色底，深色字",
+                Theme::Dark => tr("深色底，亮色字"),
+                Theme::Light => tr("浅色底，深色字"),
             };
             (t == theme, t.label(), desc)
         });
         let fonts = FontStyle::ALL.map(|f| {
             let desc = match f {
-                FontStyle::Default => "朴素框线，圆点标记",
-                FontStyle::Anime => "圆角框 + 星星爱心，主色樱花粉",
+                FontStyle::Default => tr("朴素框线，圆点标记"),
+                FontStyle::Anime => tr("圆角框 + 星星爱心，主色樱花粉"),
             };
             (f == font, f.label(), desc)
         });
@@ -2010,7 +2246,7 @@ impl Session<'_> {
             ]));
         }
         out.push(Line::styled(
-            "  Ctrl-T 换主题 · /theme light · /font anime · /config set theme light 长期生效",
+            tr("  Ctrl-T 换主题 · /theme light · /font anime · /config set theme light 长期生效"),
             dim,
         ));
         out
@@ -2048,7 +2284,13 @@ impl Session<'_> {
         };
 
         let Some(lang) = crate::i18n::Lang::parse(raw) else {
-            bail!("lang 可选值为 en / zh，收到 `{raw}`");
+            bail!(
+                "{}",
+                pick(
+                    format!("lang 可选值为 en / zh，收到 `{raw}`"),
+                    format!("lang must be en / zh, got `{raw}`")
+                )
+            );
         };
         self.app.file.set("lang", lang.code())?;
         self.app.save()?;
@@ -2060,27 +2302,34 @@ impl Session<'_> {
 
     fn set_theme(&mut self, theme: Theme) {
         self.app.overrides.theme = Some(theme.label().to_string());
-        self.state
-            .push(Entry::Success(format!("界面主题：{}", theme.label())));
+        self.state.push(Entry::Success(pick(
+            format!("界面主题：{}", theme.label()),
+            format!("Theme: {}", theme.label()),
+        )));
     }
 
     /// 换字形（框线形状 + 标记符号）
     fn set_font(&mut self, font: FontStyle) {
         self.app.overrides.font_style = Some(font.label().to_string());
         let hint = match font {
-            FontStyle::Default => "朴素框线，圆点标记",
-            FontStyle::Anime => "圆角框 + 星星爱心",
+            FontStyle::Default => tr("朴素框线，圆点标记"),
+            FontStyle::Anime => tr("圆角框 + 星星爱心"),
         };
-        self.state
-            .push(Entry::Success(format!("字形：{}（{hint}）", font.label())));
+        self.state.push(Entry::Success(pick(
+            format!("字形：{}（{hint}）", font.label()),
+            format!("Font: {} ({hint})", font.label()),
+        )));
     }
 
     /// `/mode` 不带参数时列出三档，标出当前这一档
     fn mode_lines(&self) -> Vec<Line<'static>> {
         let dim = Style::new().add_modifier(Modifier::DIM);
         let mut out = vec![Line::from(vec![
-            Span::styled("工作模式 ", Style::new().add_modifier(Modifier::BOLD)),
-            Span::raw(format!("当前「{}」", self.state.mode.title())),
+            Span::styled(tr("工作模式 "), Style::new().add_modifier(Modifier::BOLD)),
+            Span::raw(pick(
+                format!("当前「{}」", self.state.mode.title()),
+                format!("Currently \"{}\"", self.state.mode.title()),
+            )),
         ])];
         let look = Look::from_config(&self.app.effective());
         for mode in Mode::ALL {
@@ -2102,7 +2351,7 @@ impl Session<'_> {
             ]));
         }
         out.push(Line::styled(
-            "  Shift-Tab / Ctrl-P 循环切换，也可以 /mode plan",
+            tr("  Shift-Tab / Ctrl-P 循环切换，也可以 /mode plan"),
             dim,
         ));
         out
@@ -2111,9 +2360,15 @@ impl Session<'_> {
     fn set_permission_mode(&mut self, mode: &str) -> Result<()> {
         self.app.file.set("permission_mode", mode)?;
         self.app.save()?;
-        self.state.push(Entry::Success(format!(
-            "权限模式已保存：{}",
-            display_value(&self.app.effective(), "permission_mode")
+        self.state.push(Entry::Success(pick(
+            format!(
+                "权限模式已保存：{}",
+                display_value(&self.app.effective(), "permission_mode")
+            ),
+            format!(
+                "Permission mode saved: {}",
+                display_value(&self.app.effective(), "permission_mode")
+            ),
         )));
         // 设了 full 却还在 plan 里，是最容易误解的一处：说明白它此刻不生效
         if self.state.mode == Mode::Plan
@@ -2123,9 +2378,9 @@ impl Session<'_> {
             )
         {
             self.state.push(Entry::Warn(
-                "当前工作模式是 plan（强制只读），这个权限暂时不生效：\
-                 按 Shift-Tab 切到 confirm 或 auto"
-                    .into(),
+                tr("当前工作模式是 plan（强制只读），这个权限暂时不生效：\
+                 按 Shift-Tab 切到 confirm 或 auto")
+                .into(),
             ));
         }
         Ok(())
@@ -2144,16 +2399,16 @@ fn tool_label(name: &str, args_json: &str) -> (String, String) {
             .to_string()
     };
     match name {
-        "read_file" => ("读取".into(), text("path")),
+        "read_file" => (tr("读取").into(), text("path")),
         "list_dir" => {
             let path = text("path");
             (
-                "列目录".into(),
+                tr("列目录").into(),
                 if path.is_empty() { ".".into() } else { path },
             )
         }
-        "write_file" => ("写入".into(), text("path")),
-        "edit_file" => ("修改".into(), text("path")),
+        "write_file" => (tr("写入").into(), text("path")),
+        "edit_file" => (tr("修改").into(), text("path")),
         "run_command" => {
             let cmd = text("cmd");
             let rest: Vec<String> = v
@@ -2171,7 +2426,7 @@ fn tool_label(name: &str, args_json: &str) -> (String, String) {
             } else {
                 format!("{cmd} {}", rest.join(" "))
             };
-            ("运行".into(), line)
+            (tr("运行").into(), line)
         }
         other => (other.to_string(), String::new()),
     }
@@ -2220,16 +2475,22 @@ fn saved_lines(path: &str, s: &ModelSettings) -> Vec<Line<'static>> {
         ])
     };
     vec![
-        row("API 地址", s.base_url.clone()),
+        row(tr("API 地址"), s.base_url.clone()),
         row(
             "API Key",
             s.api_key
                 .as_deref()
-                .map_or_else(|| "未设置".to_string(), mask_key),
+                .map_or_else(|| tr("未设置").to_string(), mask_key),
         ),
-        row("模型", s.model.clone()),
-        row("思考力度", s.thinking.to_string()),
-        Line::styled(format!("  已写入 {path}，以后每次启动都会使用"), dim),
+        row(tr("模型"), s.model.clone()),
+        row(tr("思考力度"), s.thinking.to_string()),
+        Line::styled(
+            pick(
+                format!("  已写入 {path}，以后每次启动都会使用"),
+                format!("Wrote {path}; it will be used on every start from now on"),
+            ),
+            dim,
+        ),
     ]
 }
 
@@ -2247,15 +2508,15 @@ fn help_lines(look: &Look) -> Vec<Line<'static>> {
         .collect();
     out.push(Line::raw(""));
     out.push(Line::styled(
-        "  /model 表单：↑↓ 切换项 · 直接输入修改 · ←→ 调整思考力度 · Ctrl-S 保存 · Esc 取消",
+        tr("  /model 表单：↑↓ 切换项 · 直接输入修改 · ←→ 调整思考力度 · Ctrl-S 保存 · Esc 取消"),
         dim,
     ));
     out.push(Line::styled(
-        "  Ctrl-J 换行 · PgUp/PgDn 滚动 · Ctrl-B 到顶部 · Ctrl-G 到底部",
+        tr("  Ctrl-J 换行 · PgUp/PgDn 滚动 · Ctrl-B 到顶部 · Ctrl-G 到底部"),
         dim,
     ));
     out.push(Line::styled(
-        "  Shift-Tab / Ctrl-P 切换模式：plan 只读出报告 · confirm 每改一处确认 · auto 全自动",
+        tr("  Shift-Tab / Ctrl-P 切换模式：plan 只读出报告 · confirm 每改一处确认 · auto 全自动"),
         dim,
     ));
     out

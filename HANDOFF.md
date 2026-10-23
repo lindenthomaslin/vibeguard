@@ -256,6 +256,18 @@ In the history panel (`/sessions`, `/search`):
 | `font_style` | `default` | `default` / `anime` |
 | `lang` | `en` | `en` / `zh` — interface language; `/lang zh` switches at runtime |
 
+### Interface language
+
+English is the default; `/lang zh` switches to Chinese and persists it. Strings are written in
+Chinese at the call site and piped through `i18n::tr("…")`, which looks the translation up in
+`src/i18n/strings.rs`. A missing entry returns the Chinese unchanged — a gap shows a Chinese line,
+it never panics. Strings with interpolation use `i18n::pick(format!(zh), format!(en))`.
+
+The table is guarded by tests: no duplicate keys, no empty values, and the number of `{}`
+placeholders must match between the two languages (a mismatch would panic at runtime, not at
+compile time). Model-facing prompts stay in one language on purpose — they are instructions to
+the model, not interface text.
+
 ---
 
 ## 8. Data and privacy
@@ -277,6 +289,8 @@ src/
   main.rs        CLI entry, subcommands, graphics probe
   app.rs         App + runtime overrides (model, thinking) and config persistence
   config.rs      Config schema, validation, 0600 writer
+  i18n.rs        Language switch (En/Zh) and `tr()` — Chinese key, English value
+  i18n/strings.rs  The translation table, one line per message
   llm.rs         OpenAI-compatible client: SSE, tool_calls, retries
   tui/
     mod.rs       Event loop, message channel, background tasks

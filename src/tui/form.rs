@@ -5,6 +5,7 @@
 use super::view::Choice;
 use crate::config::{Config, DEFAULT_BASE_URL, KeySource, Thinking};
 use crate::editor::Editor;
+use crate::i18n::{pick, tr};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -167,18 +168,18 @@ impl ModelForm {
     /// 输入框边框上的标签，告诉用户正在改哪一项
     pub fn label(&self) -> Option<&'static str> {
         match self.focus {
-            F_URL => Some("API 地址"),
+            F_URL => Some(tr("API 地址")),
             F_KEY => Some("API Key"),
-            F_MODEL => Some("模型"),
+            F_MODEL => Some(tr("模型")),
             _ => None,
         }
     }
 
     pub fn hint(&self) -> &'static str {
         match self.focus {
-            F_THINKING => "←→ 调整思考力度 · ↑↓ 切换项 · Enter 下一项 · Ctrl-S 保存 · Esc 取消",
-            F_SAVE => "Enter 保存 · ↑↓ 切换项 · Esc 取消",
-            _ => "直接输入修改 · ↑↓ 切换项 · Enter 下一项 · Ctrl-S 保存 · Esc 取消",
+            F_THINKING => tr("←→ 调整思考力度 · ↑↓ 切换项 · Enter 下一项 · Ctrl-S 保存 · Esc 取消"),
+            F_SAVE => tr("Enter 保存 · ↑↓ 切换项 · Esc 取消"),
+            _ => tr("直接输入修改 · ↑↓ 切换项 · Enter 下一项 · Ctrl-S 保存 · Esc 取消"),
         }
     }
 
@@ -187,19 +188,22 @@ impl ModelForm {
         let text = |ed: &Editor| {
             let t = ed.text();
             if t.is_empty() {
-                "（未设置）".to_string()
+                tr("（未设置）").to_string()
             } else {
                 t
             }
         };
         Choice {
-            title: "模型配置".into(),
+            title: tr("模型配置").into(),
             items: vec![
-                ("API 地址".into(), text(&self.base_url)),
+                (tr("API 地址").into(), text(&self.base_url)),
                 ("API Key".into(), text(&self.api_key)),
-                ("模型".into(), text(&self.model)),
-                ("思考力度".into(), slider(self.level)),
-                ("保存".into(), "写入配置文件，以后每次启动都会使用".into()),
+                (tr("模型").into(), text(&self.model)),
+                (tr("思考力度").into(), slider(self.level)),
+                (
+                    tr("保存").into(),
+                    tr("写入配置文件，以后每次启动都会使用").into(),
+                ),
             ],
             selected: self.focus,
         }
@@ -262,28 +266,31 @@ impl ModelForm {
         if url.is_empty() {
             return Err((
                 F_URL,
-                format!("API 地址不能为空，默认是 {DEFAULT_BASE_URL}"),
+                pick(
+                    format!("API 地址不能为空，默认是 {DEFAULT_BASE_URL}"),
+                    format!("API base URL must not be empty; default is {DEFAULT_BASE_URL}"),
+                ),
             ));
         }
         if url.chars().any(char::is_whitespace) {
-            return Err((F_URL, "API 地址不能包含空白字符".into()));
+            return Err((F_URL, tr("API 地址不能包含空白字符").into()));
         }
         if let Err(e) = Config::default().set("base_url", &url) {
-            return Err((F_URL, format!("{e:#}").replace("base_url", "API 地址")));
+            return Err((F_URL, format!("{e:#}").replace("base_url", tr("API 地址"))));
         }
         let key = self.api_key.text().trim().to_string();
         if key.chars().any(char::is_whitespace) {
             return Err((
                 F_KEY,
-                "API Key 不能包含空白字符，请检查是否多复制了内容".into(),
+                tr("API Key 不能包含空白字符，请检查是否多复制了内容").into(),
             ));
         }
         let model = self.model.text().trim().to_string();
         if model.is_empty() {
-            return Err((F_MODEL, "模型不能为空，例如 deepseek-flash".into()));
+            return Err((F_MODEL, tr("模型不能为空，例如 deepseek-flash").into()));
         }
         if model.chars().any(char::is_whitespace) {
-            return Err((F_MODEL, "模型名不能包含空白字符".into()));
+            return Err((F_MODEL, tr("模型名不能包含空白字符").into()));
         }
         Ok(ModelSettings {
             base_url: url,

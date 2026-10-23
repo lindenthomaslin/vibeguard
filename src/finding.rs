@@ -1,5 +1,6 @@
 //! 漏洞数据模型：扫描器产出，界面与修复流程消费。
 
+use crate::i18n::tr;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 
@@ -26,11 +27,11 @@ impl Severity {
 
     pub fn label(self) -> &'static str {
         match self {
-            Severity::Critical => "严重",
-            Severity::High => "高危",
-            Severity::Medium => "中危",
-            Severity::Low => "低危",
-            Severity::Info => "提示",
+            Severity::Critical => tr("严重"),
+            Severity::High => tr("高危"),
+            Severity::Medium => tr("中危"),
+            Severity::Low => tr("低危"),
+            Severity::Info => tr("提示"),
         }
     }
 }

@@ -1,6 +1,7 @@
 //! 终端输出：Claude Code 风格的框线、状态符号、spinner 与流式渲染。
 
 use crate::config::Config;
+use crate::i18n::{pick, tr};
 use crate::llm::{ChatResponse, StreamEvent};
 use crate::theme::Theme;
 use console::{Color, Term, measure_text_width, style, truncate_str};
@@ -174,9 +175,15 @@ impl StreamPrinter {
                 delay,
                 reason,
             } => {
-                let line = format!(
-                    "请求失败，{:.1}s 后第 {attempt} 次重试：{reason}",
-                    delay.as_secs_f64()
+                let line = pick(
+                    format!(
+                        "请求失败，{:.1}s 后第 {attempt} 次重试：{reason}",
+                        delay.as_secs_f64()
+                    ),
+                    format!(
+                        "Request failed, retrying in {:.1}s (attempt {attempt}): {reason}",
+                        delay.as_secs_f64()
+                    ),
                 );
                 match &self.spinner {
                     Some(pb) => pb.suspend(|| warn(&line)),
@@ -186,7 +193,7 @@ impl StreamPrinter {
             StreamEvent::Reasoning(text) => {
                 if !self.show_reasoning {
                     if let Some(pb) = &self.spinner {
-                        pb.set_message("思考中…");
+                        pb.set_message(tr("思考中…"));
                     }
                     return;
                 }
@@ -210,7 +217,7 @@ impl StreamPrinter {
             pb.finish_and_clear();
         }
         match (self.phase, next) {
-            (_, Phase::Reasoning) => println!("{}", style("✻ 思考过程").dim().italic()),
+            (_, Phase::Reasoning) => println!("{}", style(tr("✻ 思考过程")).dim().italic()),
             (Phase::Reasoning, Phase::Content) => println!("\n"),
             _ => {}
         }
@@ -235,14 +242,23 @@ pub fn usage_text(res: &ChatResponse, elapsed: Duration) -> String {
         parts.push(model.clone());
     }
     if let Some(u) = &res.usage {
-        let mut input = format!("输入 {}", u.prompt_tokens);
+        let mut input = pick(
+            format!("输入 {}", u.prompt_tokens),
+            format!("Input {}", u.prompt_tokens),
+        );
         if let Some(hit) = u.prompt_cache_hit_tokens.filter(|&n| n > 0) {
-            input.push_str(&format!("（缓存命中 {hit}）"));
+            input.push_str(&pick(
+                format!("（缓存命中 {hit}）"),
+                format!("(cache hit {hit})"),
+            ));
         }
         parts.push(input);
-        let mut output = format!("输出 {}", u.completion_tokens);
+        let mut output = pick(
+            format!("输出 {}", u.completion_tokens),
+            format!("Output {}", u.completion_tokens),
+        );
         if let Some(r) = u.reasoning_tokens().filter(|&n| n > 0) {
-            output.push_str(&format!("（思考 {r}）"));
+            output.push_str(&pick(format!("（思考 {r}）"), format!("(thinking {r})")));
         }
         parts.push(output);
     }

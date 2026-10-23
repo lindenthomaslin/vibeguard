@@ -5,6 +5,7 @@
 //! 这样输入不会卡，也不需要在按键路径上做防抖。
 
 use crate::editor::Editor;
+use crate::i18n::pick;
 use crate::input::handle_key;
 use crate::sessions::{CatalogEntry, find_folded, fold, snippet};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -118,9 +119,15 @@ impl SessionsPanel {
     /// 边框上的标题：过滤时把「还剩几个」也写出来
     pub fn title(&self) -> String {
         if self.matched() == self.items.len() {
-            format!("历史对话 {}", self.items.len())
+            pick(
+                format!("历史对话 {}", self.items.len()),
+                format!("Conversation {}", self.items.len()),
+            )
         } else {
-            format!("历史对话 {}/{}", self.matched(), self.items.len())
+            pick(
+                format!("历史对话 {}/{}", self.matched(), self.items.len()),
+                format!("Conversation {}/{}", self.matched(), self.items.len()),
+            )
         }
     }
 
@@ -172,7 +179,7 @@ impl SessionsPanel {
         self.items.remove(pos);
         self.pending = None;
         self.notice = Some(Notice {
-            text: format!("已删除「{title}」"),
+            text: pick(format!("已删除「{title}」"), format!("Deleted \"{title}\"")),
             error: false,
         });
         self.refilter(true);

@@ -3,6 +3,7 @@
 use crate::app::App;
 use crate::commands;
 use crate::editor::{Candidate, Editor};
+use crate::i18n::{pick, tr};
 use crate::input::Outcome;
 use crate::llm::{ChatOptions, LlmClient, Message};
 use crate::mode::Mode;
@@ -96,12 +97,14 @@ pub async fn run(app: &mut App) -> Result<()> {
     ui::set_theme(crate::theme::Theme::parse(&cfg.theme).unwrap_or_default());
     ui::banner(&cfg);
     if cfg.api_key.is_none() {
-        ui::warn("尚未配置 API Key：输入 /config init，或设置环境变量 DEEPSEEK_API_KEY");
+        ui::warn(tr(
+            "尚未配置 API Key：输入 /config init，或设置环境变量 DEEPSEEK_API_KEY",
+        ));
     }
     for w in cfg.warnings() {
         ui::warn(&w);
     }
-    ui::hint("直接输入问题与 AI 对话，/help 查看命令");
+    ui::hint(tr("直接输入问题与 AI 对话，/help 查看命令"));
 
     let mut history: Vec<Message> = Vec::new();
     let mut client: Option<LlmClient> = None;
@@ -119,7 +122,7 @@ pub async fn run(app: &mut App) -> Result<()> {
                     break;
                 }
                 interrupted = true;
-                ui::hint("再按一次 Ctrl-C 退出");
+                ui::hint(tr("再按一次 Ctrl-C 退出"));
                 continue;
             }
             Outcome::Continue => continue,
@@ -168,7 +171,7 @@ pub async fn run(app: &mut App) -> Result<()> {
         messages.extend(history.iter().cloned());
         messages.push(Message::user(input));
 
-        let mut printer = ui::StreamPrinter::new("等待响应…", true);
+        let mut printer = ui::StreamPrinter::new(tr("等待响应…"), true);
         let start = Instant::now();
         let result = c
             .chat_stream(&messages, &ChatOptions::default(), |ev| {
@@ -179,7 +182,7 @@ pub async fn run(app: &mut App) -> Result<()> {
         match result {
             Ok(res) => {
                 if res.is_truncated() {
-                    ui::warn("回答达到 max_tokens 上限被截断");
+                    ui::warn(tr("回答达到 max_tokens 上限被截断"));
                 }
                 ui::usage_line(&res, start.elapsed());
                 history.push(Message::user(input));
@@ -206,7 +209,7 @@ async fn slash_command(
         }
         "clear" => {
             history.clear();
-            ui::success("已清空对话历史");
+            ui::success(tr("已清空对话历史"));
         }
         "config" => match args {
             [] | ["show"] => commands::show_config(app),
@@ -214,79 +217,110 @@ async fn slash_command(
             ["set", key] => commands::config_set(app, key, None)?,
             ["set", key, value @ ..] => commands::config_set(app, key, Some(value.join(" ")))?,
             ["unset", key] => commands::config_unset(app, key)?,
-            _ => bail!("用法：/config [show|init|set <key> [value]|unset <key>]"),
+            _ => bail!(
+                "{}",
+                tr("用法：/config [show|init|set <key> [value]|unset <key>]")
+            ),
         },
         "model" => match args {
-            [] => ui::info(&format!("当前模型：{}", app.effective().model)),
+            [] => ui::info(&pick(
+                format!("当前模型：{}", app.effective().model),
+                format!("Current model: {}", app.effective().model),
+            )),
             [model] => {
                 app.overrides.model = Some(model.to_string());
-                ui::success(&format!(
-                    "本次会话改用模型 {model}（持久保存请用 /config set model）"
+                ui::success(&pick(
+                    format!("本次会话改用模型 {model}（持久保存请用 /config set model）"),
+                    format!(
+                        "Switched this session to model {model} (use /config set model to persist)"
+                    ),
                 ));
                 for w in app.effective().warnings() {
                     ui::warn(&w);
                 }
             }
-            _ => bail!("用法：/model [name]"),
+            _ => bail!("{}", tr("用法：/model [name]")),
         },
         "mode" => match args {
-            [] => ui::info(&format!(
-                "当前模式：「{}」{}",
-                mode.title(),
-                mode.describe()
+            [] => ui::info(&pick(
+                format!("当前模式：「{}」{}", mode.title(), mode.describe()),
+                format!("Current mode: \"{}\"{}", mode.title(), mode.describe()),
             )),
             [name] => match Mode::parse(name) {
                 Some(next) => {
                     *mode = next;
-                    ui::success(&format!(
-                        "已切换到「{}」模式：{}",
-                        mode.title(),
-                        mode.describe()
+                    ui::success(&pick(
+                        format!("已切换到「{}」模式：{}", mode.title(), mode.describe()),
+                        format!("Switched to \"{}\" mode: {}", mode.title(), mode.describe()),
                     ));
                 }
-                None => bail!("模式可选值为 plan / confirm / auto"),
+                None => bail!("{}", tr("模式可选值为 plan / confirm / auto")),
             },
-            _ => bail!("用法：/mode [plan|confirm|auto]"),
+            _ => bail!("{}", tr("用法：/mode [plan|confirm|auto]")),
         },
         "thinking" => match args {
-            [] => ui::info(&format!("当前思考模式：{}", app.effective().thinking)),
+            [] => ui::info(&pick(
+                format!("当前思考模式：{}", app.effective().thinking),
+                format!("Current thinking mode: {}", app.effective().thinking),
+            )),
             [mode] => {
                 let mode = mode.parse().map_err(anyhow::Error::msg)?;
                 app.overrides.thinking = Some(mode);
-                ui::success(&format!("本次会话思考模式：{mode}"));
+                ui::success(&pick(
+                    format!("本次会话思考模式：{mode}"),
+                    format!("Thinking mode for this session: {mode}"),
+                ));
             }
-            _ => bail!("用法：/thinking [auto|off|low|high|max]"),
+            _ => bail!("{}", tr("用法：/thinking [auto|off|low|high|max]")),
         },
         "theme" => match args {
-            [] => ui::info(&format!("当前主题：{}", app.effective().theme)),
+            [] => ui::info(&pick(
+                format!("当前主题：{}", app.effective().theme),
+                format!("Current theme: {}", app.effective().theme),
+            )),
             [theme] => {
                 let theme = theme.to_lowercase();
                 if matches!(theme.as_str(), "dark" | "light") {
                     app.overrides.theme = Some(theme.clone());
                     ui::set_theme(crate::theme::Theme::parse(&theme).unwrap_or_default());
-                    ui::success(&format!("界面主题已切换为：{theme}"));
+                    ui::success(&pick(
+                        format!("界面主题已切换为：{theme}"),
+                        format!("Theme switched to: {theme}"),
+                    ));
                 } else {
-                    bail!("主题可选值为 dark / light");
+                    bail!("{}", tr("主题可选值为 dark / light"));
                 }
             }
-            _ => bail!("用法：/theme [dark|light]"),
+            _ => bail!("{}", tr("用法：/theme [dark|light]")),
         },
         "font" => match args {
-            [] => ui::info(&format!("当前字体风格：{}", app.effective().font_style)),
+            [] => ui::info(&pick(
+                format!("当前字体风格：{}", app.effective().font_style),
+                format!("Current font style: {}", app.effective().font_style),
+            )),
             [style] => {
                 let style = style.to_lowercase();
                 if matches!(style.as_str(), "default" | "anime") {
                     app.overrides.font_style = Some(style.clone());
-                    ui::success(&format!("字体风格已切换为：{style}"));
+                    ui::success(&pick(
+                        format!("字体风格已切换为：{style}"),
+                        format!("Font style switched to: {style}"),
+                    ));
                 } else {
-                    bail!("字体风格可选值为 default / anime");
+                    bail!("{}", tr("字体风格可选值为 default / anime"));
                 }
             }
-            _ => bail!("用法：/font [default|anime]"),
+            _ => bail!("{}", tr("用法：/font [default|anime]")),
         },
         "ping" => commands::ping(app).await?,
-        "" => bail!("请输入命令，/help 查看可用命令"),
-        _ => bail!("未知命令 /{name}，/help 查看可用命令"),
+        "" => bail!("{}", tr("请输入命令，/help 查看可用命令")),
+        _ => bail!(
+            "{}",
+            pick(
+                format!("未知命令 /{name}，/help 查看可用命令"),
+                format!("Unknown command /{name}; /help lists the commands")
+            )
+        ),
     }
     Ok(())
 }

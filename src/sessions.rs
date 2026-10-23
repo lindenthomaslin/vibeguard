@@ -2,6 +2,7 @@
 //! 对话里可能有代码和密钥，所以文件权限与配置文件一样是 0600。
 
 use crate::config::write_private;
+use crate::i18n::{pick, tr};
 use crate::llm::{Message, Role};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -99,7 +100,7 @@ fn make_title(text: &str) -> String {
         title = title.chars().take(TITLE_CHARS).collect::<String>() + "…";
     }
     if title.is_empty() {
-        "（无标题）".to_string()
+        tr("（无标题）").to_string()
     } else {
         title
     }
@@ -159,26 +160,63 @@ impl Store {
     /// 先写临时文件再改名，中途崩溃不会留下写了一半的对话
     pub fn save(&self, c: &Conversation) -> Result<()> {
         if !valid_id(&c.id) {
-            bail!("非法的对话编号：{}", c.id);
+            bail!(
+                "{}",
+                pick(
+                    format!("非法的对话编号：{}", c.id),
+                    format!("Invalid conversation id: {}", c.id)
+                )
+            );
         }
-        fs::create_dir_all(&self.dir)
-            .with_context(|| format!("创建对话目录失败：{}", self.dir.display()))?;
-        let text = serde_json::to_string_pretty(c).context("序列化对话失败")?;
+        fs::create_dir_all(&self.dir).with_context(|| {
+            pick(
+                format!("创建对话目录失败：{}", self.dir.display()),
+                format!(
+                    "Creating the conversation directory failed: {}",
+                    self.dir.display()
+                ),
+            )
+        })?;
+        let text = serde_json::to_string_pretty(c).context(tr("序列化对话失败"))?;
         let path = self.file(&c.id);
         let tmp = self.dir.join(format!("{}.json.tmp", c.id));
-        write_private(&tmp, &text).with_context(|| format!("写入对话失败：{}", tmp.display()))?;
-        fs::rename(&tmp, &path).with_context(|| format!("保存对话失败：{}", path.display()))
+        write_private(&tmp, &text).with_context(|| {
+            pick(
+                format!("写入对话失败：{}", tmp.display()),
+                format!("Writing the conversation failed: {}", tmp.display()),
+            )
+        })?;
+        fs::rename(&tmp, &path).with_context(|| {
+            pick(
+                format!("保存对话失败：{}", path.display()),
+                format!("Saving the conversation failed: {}", path.display()),
+            )
+        })
     }
 
     pub fn load(&self, id: &str) -> Result<Conversation> {
         if !valid_id(id) {
-            bail!("非法的对话编号：{id}");
+            bail!(
+                "{}",
+                pick(
+                    format!("非法的对话编号：{id}"),
+                    format!("Invalid conversation id: {id}")
+                )
+            );
         }
         let path = self.file(id);
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("读取对话失败：{}", path.display()))?;
-        let mut c: Conversation = serde_json::from_str(&text)
-            .with_context(|| format!("对话文件格式错误：{}", path.display()))?;
+        let text = fs::read_to_string(&path).with_context(|| {
+            pick(
+                format!("读取对话失败：{}", path.display()),
+                format!("Reading the conversation failed: {}", path.display()),
+            )
+        })?;
+        let mut c: Conversation = serde_json::from_str(&text).with_context(|| {
+            pick(
+                format!("对话文件格式错误：{}", path.display()),
+                format!("Malformed conversation file: {}", path.display()),
+            )
+        })?;
         // 以文件名为准，避免手动改名后保存到别的文件
         c.id = id.to_string();
         Ok(c)
@@ -189,7 +227,15 @@ impl Store {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
             Err(e) => {
-                return Err(e).with_context(|| format!("读取对话目录失败：{}", self.dir.display()));
+                return Err(e).with_context(|| {
+                    pick(
+                        format!("读取对话目录失败：{}", self.dir.display()),
+                        format!(
+                            "Reading the conversation directory failed: {}",
+                            self.dir.display()
+                        ),
+                    )
+                });
             }
         };
         let mut all = Vec::new();
@@ -255,15 +301,32 @@ impl Store {
     /// 删掉一个对话。找不到时报错，让界面能说清楚是没删还是删错了。
     pub fn delete(&self, id: &str) -> Result<()> {
         if !valid_id(id) {
-            bail!("非法的对话编号：{id}");
+            bail!(
+                "{}",
+                pick(
+                    format!("非法的对话编号：{id}"),
+                    format!("Invalid conversation id: {id}")
+                )
+            );
         }
         let path = self.file(id);
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                bail!("对话已经不存在：{}", path.display())
+                bail!(
+                    "{}",
+                    pick(
+                        format!("对话已经不存在：{}", path.display()),
+                        format!("The conversation no longer exists: {}", path.display())
+                    )
+                )
             }
-            Err(e) => Err(e).with_context(|| format!("删除对话失败：{}", path.display())),
+            Err(e) => Err(e).with_context(|| {
+                pick(
+                    format!("删除对话失败：{}", path.display()),
+                    format!("Deleting the conversation failed: {}", path.display()),
+                )
+            }),
         }
     }
 }
@@ -336,10 +399,19 @@ pub(crate) fn snippet(text: &str, at: usize, len: usize) -> String {
 pub fn format_ago(ts: i64, now: i64) -> String {
     let secs = now - ts;
     match secs {
-        i64::MIN..=59 => "刚刚".to_string(),
-        60..=3599 => format!("{} 分钟前", secs / 60),
-        3600..=86399 => format!("{} 小时前", secs / 3600),
-        86400..=2_591_999 => format!("{} 天前", secs / 86400),
+        i64::MIN..=59 => tr("刚刚").to_string(),
+        60..=3599 => pick(
+            format!("{} 分钟前", secs / 60),
+            format!("{} minutes ago", secs / 60),
+        ),
+        3600..=86399 => pick(
+            format!("{} 小时前", secs / 3600),
+            format!("{} hours ago", secs / 3600),
+        ),
+        86400..=2_591_999 => pick(
+            format!("{} 天前", secs / 86400),
+            format!("{} days ago", secs / 86400),
+        ),
         _ => chrono::DateTime::from_timestamp(ts, 0)
             .map(|d| {
                 d.with_timezone(&chrono::Local)
