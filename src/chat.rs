@@ -37,6 +37,13 @@ pub enum Entry {
         index: usize,
         total: usize,
     },
+    /// 一次工具调用：名字 + 参数摘要 + 是否成功。
+    /// 没有这条的话，多轮工具调用期间屏幕上什么都没有，看起来像卡死了。
+    Tool {
+        name: String,
+        detail: String,
+        ok: bool,
+    },
     /// 一处文件改动：路径 + 改动前后的代码，按当前宽度排版成 diff
     Diff {
         path: String,
@@ -168,6 +175,21 @@ impl Entry {
                 out.extend(scan_ui::diff_lines(fix, 3, width, look));
                 out
             }
+            Entry::Tool { name, detail, ok } => {
+                // 用「·」而不是正文那个实心点：工具行是过程，不该和模型说的话抢注意力
+                let (mark, style) = if *ok {
+                    ("·", look.muted())
+                } else {
+                    (look.glyphs.error, look.error())
+                };
+                // 缩进两格：这是回复内部的一步，不是新的一段
+                let text = if detail.is_empty() {
+                    format!("  {mark} {name}")
+                } else {
+                    format!("  {mark} {name} {detail}")
+                };
+                vec![Line::styled(clip_line(&text, width), style)]
+            }
             Entry::Diff { path, old, new } => {
                 // 复用扫描界面的 diff 排版：只显示改动和前后几行上下文，
                 // 整文件重写时也不会把整份文件刷两遍
@@ -205,6 +227,25 @@ impl Entry {
             }
         }
     }
+}
+
+/// 单行摘要按显示宽度截断，末尾补省略号
+fn clip_line(s: &str, width: usize) -> String {
+    if text_width(s) <= width {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w > width.saturating_sub(1) {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push('…');
+    out
 }
 
 /// 一行的纯文本（去掉样式），测试里用来断言内容
@@ -264,16 +305,21 @@ impl Transcript {
     pub fn lines_marked(&self, width: usize, look: &Look) -> (Vec<Line<'static>>, usize) {
         let mut out: Vec<Line<'static>> = Vec::new();
         let mut last_start = 0;
+        let mut prev_tool = false;
         for entry in &self.entries {
             let rows = entry.render(width, look);
             if rows.is_empty() {
                 continue;
             }
-            if !out.is_empty() {
+            // 工具调用是「过程」，紧贴着上下的文字看才像一条流水账；
+            // 每行都空一行会把一屏切成碎片
+            let is_tool = matches!(entry, Entry::Tool { .. });
+            if !out.is_empty() && !(is_tool || prev_tool) {
                 out.push(Line::raw(""));
             }
             last_start = out.len();
             out.extend(rows);
+            prev_tool = is_tool;
         }
         (out, last_start)
     }
@@ -535,5 +581,43 @@ mod tests {
         let mut s = Scroll::default();
         s.resolve(100, 10);
         assert_eq!(s.page(), 9);
+    }
+
+    #[test]
+    fn a_tool_call_is_visible_in_the_transcript() {
+        let mut t = Transcript::default();
+        t.start_assistant();
+        t.append_content("我先看看这个文件");
+        t.push(Entry::Tool {
+            name: "读取".into(),
+            detail: "app.py".into(),
+            ok: true,
+        });
+        t.push(Entry::Tool {
+            name: "运行 失败".into(),
+            detail: "错误：权限不足".into(),
+            ok: false,
+        });
+        let text: Vec<String> = t.lines(80).iter().map(line_text).collect();
+        assert!(text.iter().any(|l| l.contains("读取 app.py")), "{text:?}");
+        assert!(
+            text.iter().any(|l| l.contains("运行 失败")),
+            "失败的工具调用也要留一行"
+        );
+        // 工具行夹在中间时，后面的文字要另起一段，不能续写到工具行上
+        t.append_content("看完了");
+        let text: Vec<String> = t.lines(80).iter().map(line_text).collect();
+        assert!(text.iter().any(|l| l.contains("看完了")), "{text:?}");
+        // 工具行前后不留空行：它是过程，不该把对话切碎
+        let i = text.iter().position(|l| l.contains("读取 app.py")).unwrap();
+        assert!(
+            text[i].starts_with("  "),
+            "工具行要缩进，才看得出是回复里的一步"
+        );
+        assert_eq!(
+            text[i + 1],
+            "  ✗ 运行 失败 错误：权限不足",
+            "两条工具行贴在一起，中间不空行"
+        );
     }
 }

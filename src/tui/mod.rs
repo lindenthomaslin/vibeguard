@@ -44,8 +44,20 @@ use view::Props;
 /// 同时跑几批判定。3 是折中：再多容易撞上端点的速率限制，反而更慢。
 const CONCURRENT_JUDGEMENTS: usize = 3;
 
+/// 一轮对话最多允许几次工具调用。这个上限是防死循环的，不是防「活干得多」的：
+/// 一个真实的多步任务用掉二三十轮很正常，原来的 10 轮连「读文件 → 改 → 跑测试」都走不完。
+const MAX_TOOL_ROUNDS: usize = 40;
+
 const HINT: &str = "Enter 发送 · Ctrl-J 换行 · Shift-Tab 换模式 · / 命令 · Ctrl-D 退出";
 const BUSY_HINT: &str = "Esc 取消 · PgUp/PgDn 滚动";
+
+/// 一轮对话的最终结果
+struct ChatDone {
+    res: ChatResponse,
+    elapsed: Duration,
+    /// 提前停下的原因（轮数用尽、原地打转）。有值时要单独提示，别让它看起来像正常结束
+    stopped: Option<String>,
+}
 
 /// 后台任务发回的消息都带着发起时的请求编号；取消后编号变化，迟到的消息会被丢弃
 enum Msg {
@@ -53,7 +65,14 @@ enum Msg {
     Reasoning(u64, String),
     Content(u64, String),
     Retry(u64, String),
-    Done(u64, Result<(ChatResponse, Duration)>),
+    Done(u64, Result<ChatDone>),
+    /// 一次工具调用：让用户在等待期间看得见它在干什么
+    Tool {
+        req: u64,
+        name: String,
+        detail: String,
+        ok: bool,
+    },
     /// 自动模式下已经写好的改动，回放给用户看
     Diff {
         req: u64,
@@ -408,6 +427,14 @@ impl Session<'_> {
                 self.state.push(text);
             }
             Msg::Done(req, result) if req == self.req => self.finish_chat(result),
+            Msg::Tool {
+                req,
+                name,
+                detail,
+                ok,
+            } if req == self.req => {
+                self.state.push(Entry::Tool { name, detail, ok });
+            }
             Msg::FixProgress(req, line) if req == self.req => {
                 self.state.push(Entry::Info(line));
             }
@@ -467,6 +494,7 @@ impl Session<'_> {
             | Msg::ScanDone(..)
             | Msg::ScanProgress(..)
             | Msg::ScanAiDone(..)
+            | Msg::Tool { .. }
             | Msg::FixProgress(..)
             | Msg::FixesReady(..) => {
                 return false;
@@ -538,11 +566,32 @@ impl Session<'_> {
             };
 
             // 工具调用循环
-            let mut loop_count = 0;
-            let result = loop {
-                loop_count += 1;
-                if loop_count > 10 {
-                    break Err(anyhow::anyhow!("工具调用超过最大次数限制"));
+            let mut rounds = 0usize;
+            // 每一轮的文字都攒起来：多步任务里模型常常「说一段 → 调工具 → 再说一段」，
+            // 只留最后一轮的话，前面说过的话就丢了
+            let mut answer = String::new();
+            let mut last_signature: Option<String> = None;
+            let mut repeats = 0usize;
+
+            let result: Result<(ChatResponse, Duration, Option<String>)> = loop {
+                rounds += 1;
+                if rounds > MAX_TOOL_ROUNDS {
+                    let note = format!(
+                        "这一轮已经调用工具 {MAX_TOOL_ROUNDS} 次，先停在这里。\
+                         接着说「继续」我就往下做"
+                    );
+                    break Ok((
+                        ChatResponse {
+                            content: String::new(),
+                            reasoning: String::new(),
+                            finish_reason: None,
+                            usage: None,
+                            model: None,
+                            tool_calls: Vec::new(),
+                        },
+                        start.elapsed(),
+                        Some(note),
+                    ));
                 }
 
                 let loop_result = client
@@ -571,89 +620,153 @@ impl Session<'_> {
 
                 match loop_result {
                     Ok(res) => {
-                        if res.wants_tool_calls() {
-                            // 添加助理的工具调用请求
-                            messages.push(Message::tool_calls(res.tool_calls.clone()));
+                        answer.push_str(&res.content);
+                        if !res.wants_tool_calls() {
+                            break Ok((res, start.elapsed(), None));
+                        }
 
-                            // 执行工具
-                            for call in &res.tool_calls {
-                                let tool_name = &call.function.name;
-                                let tool_args = &call.function.arguments;
-                                let is_write =
-                                    matches!(tool_name.as_str(), "edit_file" | "write_file");
-                                let (path, old_code, new_code) =
-                                    write_preview(tool_name, tool_args);
+                        // 添加助理的工具调用请求
+                        messages.push(Message::tool_calls(res.tool_calls.clone()));
 
-                                // 计划模式：写操作直接挡回去，让模型把建议写进报告
-                                if is_write && mode == Mode::Plan {
+                        for call in &res.tool_calls {
+                            let tool_name = &call.function.name;
+                            let tool_args = &call.function.arguments;
+                            let (label, detail) = tool_label(tool_name, tool_args);
+
+                            // 同样的工具 + 同样的参数连着来三次，基本就是在原地打转
+                            let signature = format!("{tool_name}\u{1}{tool_args}");
+                            if last_signature.as_deref() == Some(signature.as_str()) {
+                                repeats += 1;
+                            } else {
+                                repeats = 1;
+                                last_signature = Some(signature);
+                            }
+
+                            let is_write = matches!(tool_name.as_str(), "edit_file" | "write_file");
+                            let (path, old_code, new_code) = write_preview(tool_name, tool_args);
+
+                            // 计划模式：写操作直接挡回去，让模型把建议写进报告
+                            if is_write && mode == Mode::Plan {
+                                messages.push(Message::tool_result(
+                                    call.id.clone(),
+                                    "计划模式下不能修改文件：请把修复建议写进报告，\
+                                     由用户切换到逐条确认或全自动模式后再动手。"
+                                        .to_string(),
+                                ));
+                                // 挡回去这件事要让用户看见，否则模型反复尝试时屏幕是静的
+                                let _ = events.send(Msg::Tool {
+                                    req,
+                                    name: label,
+                                    detail: format!("{detail}（计划模式，已挡回）"),
+                                    ok: false,
+                                });
+                                continue;
+                            }
+
+                            // 逐条确认：先把改动摊给用户看，等他点头再写
+                            if is_write && mode == Mode::Confirm && !always.load(Ordering::Relaxed)
+                            {
+                                let (reply, verdict) = oneshot::channel();
+                                let sent = events.send(Msg::Proposal {
+                                    req,
+                                    path: path.clone(),
+                                    old: old_code.clone(),
+                                    new: new_code.clone(),
+                                    reply,
+                                });
+                                // 发不出去说明界面已经关了，这个任务也没有存在的意义
+                                if sent.is_err() {
+                                    return;
+                                }
+                                if !verdict.await.unwrap_or(false) {
                                     messages.push(Message::tool_result(
                                         call.id.clone(),
-                                        "计划模式下不能修改文件：请把修复建议写进报告，\
-                                         由用户切换到逐条确认或全自动模式后再动手。"
+                                        "用户拒绝了这个改动。不要重试，继续处理下一个问题。"
                                             .to_string(),
                                     ));
+                                    let _ = events.send(Msg::Tool {
+                                        req,
+                                        name: label,
+                                        detail: format!("{detail}（你拒绝了）"),
+                                        ok: false,
+                                    });
                                     continue;
                                 }
+                            }
 
-                                // 逐条确认：先把改动摊给用户看，等他点头再写
-                                if is_write
-                                    && mode == Mode::Confirm
-                                    && !always.load(Ordering::Relaxed)
-                                {
-                                    let (reply, answer) = oneshot::channel();
-                                    let sent = events.send(Msg::Proposal {
+                            // 先报「正在做什么」，再执行：慢命令（跑测试）期间屏幕不能是静的
+                            let _ = events.send(Msg::Tool {
+                                req,
+                                name: label.clone(),
+                                detail: detail.clone(),
+                                ok: true,
+                            });
+
+                            let tool_result =
+                                crate::tools::execute_tool(tool_name, tool_args, &perm);
+                            let ok = !tool_result.starts_with("错误");
+                            if !ok {
+                                let first = tool_result.lines().next().unwrap_or("").to_string();
+                                let _ = events.send(Msg::Tool {
+                                    req,
+                                    name: format!("{label} 失败"),
+                                    detail: first,
+                                    ok: false,
+                                });
+                            }
+
+                            if is_write {
+                                if mode == Mode::Confirm {
+                                    let _ = events.send(Msg::Applied {
+                                        req,
+                                        path: path.clone(),
+                                        ok,
+                                    });
+                                } else {
+                                    let _ = events.send(Msg::Diff {
                                         req,
                                         path: path.clone(),
                                         old: old_code.clone(),
                                         new: new_code.clone(),
-                                        reply,
                                     });
-                                    // 发不出去说明界面已经关了，这个任务也没有存在的意义
-                                    if sent.is_err() {
-                                        return;
-                                    }
-                                    if !answer.await.unwrap_or(false) {
-                                        messages.push(Message::tool_result(
-                                            call.id.clone(),
-                                            "用户拒绝了这个改动。不要重试，继续处理下一个问题。"
-                                                .to_string(),
-                                        ));
-                                        continue;
-                                    }
                                 }
-
-                                let tool_result =
-                                    crate::tools::execute_tool(tool_name, tool_args, &perm);
-                                let ok = !tool_result.starts_with("错误");
-
-                                if is_write {
-                                    if mode == Mode::Confirm {
-                                        let _ = events.send(Msg::Applied {
-                                            req,
-                                            path: path.clone(),
-                                            ok,
-                                        });
-                                    } else {
-                                        let _ = events.send(Msg::Diff {
-                                            req,
-                                            path: path.clone(),
-                                            old: old_code.clone(),
-                                            new: new_code.clone(),
-                                        });
-                                    }
-                                }
-
-                                messages.push(Message::tool_result(call.id.clone(), tool_result));
                             }
-                            // 继续循环获取下一个回复
-                        } else {
-                            break Ok((res, start.elapsed()));
+
+                            messages.push(Message::tool_result(call.id.clone(), tool_result));
+                        }
+
+                        if repeats >= 3 {
+                            break Ok((
+                                res,
+                                start.elapsed(),
+                                Some(format!(
+                                    "模型连着 {repeats} 次用同样的参数调用同一个工具，\
+                                     判断为原地打转，先停下来。换个说法，或者 /scan 看看现状"
+                                )),
+                            ));
                         }
                     }
                     Err(e) => break Err(e),
                 }
             };
-            let _ = tx.send(Msg::Done(req, result));
+
+            let _ = tx.send(Msg::Done(
+                req,
+                result.map(|(mut res, elapsed, stopped)| {
+                    if let Some(note) = &stopped {
+                        if !answer.is_empty() && !answer.ends_with('\n') {
+                            answer.push('\n');
+                        }
+                        answer.push_str(&format!("\n> {note}"));
+                    }
+                    res.content = answer;
+                    ChatDone {
+                        res,
+                        elapsed,
+                        stopped,
+                    }
+                }),
+            ));
         }));
     }
 
@@ -669,19 +782,28 @@ impl Session<'_> {
         }
     }
 
-    fn finish_chat(&mut self, result: Result<(ChatResponse, Duration)>) {
+    fn finish_chat(&mut self, result: Result<ChatDone>) {
         self.finish_task();
         let user = self.pending_user.take();
         match result {
-            Ok((res, elapsed)) => {
-                if res.is_truncated() {
+            Ok(done) => {
+                if done.res.is_truncated() {
                     self.state
                         .push(Entry::Warn("回答达到 max_tokens 上限被截断".into()));
                 }
-                self.last_usage = ui::usage_text(&res, elapsed);
-                if let Some(user) = user {
+                // 提前停下（轮数用尽 / 原地打转）不是错误，但必须说清楚，
+                // 否则用户会以为「它就干到这里为止」
+                if let Some(reason) = done.stopped {
+                    self.state.push(Entry::Warn(reason));
+                }
+                self.last_usage = ui::usage_text(&done.res, done.elapsed);
+                // 一个字都没说出来就别往历史里塞一条空的
+                if let Some(user) = user
+                    && !done.res.content.trim().is_empty()
+                {
                     self.conv.model = self.app.effective().model;
-                    self.conv.push_exchange(&user, &res.content, now_secs());
+                    self.conv
+                        .push_exchange(&user, &done.res.content, now_secs());
                     if let Err(e) = self.store.save(&self.conv) {
                         self.state.push(Entry::Warn(format!("对话保存失败：{e:#}")));
                     }
@@ -1761,6 +1883,50 @@ impl Session<'_> {
 }
 
 /// 从工具参数里取出路径和改动前后的代码，供确认卡片和 diff 显示
+/// 工具调用的中文名和参数摘要。用中文是因为这是给人看的；
+/// 具体参数（路径、命令）保持原样，方便一眼认出在动哪个文件。
+fn tool_label(name: &str, args_json: &str) -> (String, String) {
+    let v: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
+    let text = |key: &str| -> String {
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    match name {
+        "read_file" => ("读取".into(), text("path")),
+        "list_dir" => {
+            let path = text("path");
+            (
+                "列目录".into(),
+                if path.is_empty() { ".".into() } else { path },
+            )
+        }
+        "write_file" => ("写入".into(), text("path")),
+        "edit_file" => ("修改".into(), text("path")),
+        "run_command" => {
+            let cmd = text("cmd");
+            let rest: Vec<String> = v
+                .get("args")
+                .and_then(|a| a.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let line = if rest.is_empty() {
+                cmd
+            } else {
+                format!("{cmd} {}", rest.join(" "))
+            };
+            ("运行".into(), line)
+        }
+        other => (other.to_string(), String::new()),
+    }
+}
+
 fn write_preview(tool_name: &str, args_json: &str) -> (String, String, String) {
     let Ok(args) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(args_json)
     else {
@@ -1929,5 +2095,45 @@ mod tests {
             name_colour(&dark),
             "浅色和深色主题的命令名颜色应该不同"
         );
+    }
+
+    #[test]
+    fn tool_labels_say_what_is_about_to_be_touched() {
+        let cases = [
+            (
+                "read_file",
+                r#"{"path":"src/app.py"}"#,
+                "读取",
+                "src/app.py",
+            ),
+            (
+                "write_file",
+                r#"{"path":"a.txt","content":"x"}"#,
+                "写入",
+                "a.txt",
+            ),
+            (
+                "edit_file",
+                r#"{"path":"b.rs","old_str":"a","new_str":"b"}"#,
+                "修改",
+                "b.rs",
+            ),
+            ("list_dir", r#"{}"#, "列目录", "."),
+            (
+                "run_command",
+                r#"{"cmd":"cargo","args":["test","--quiet"]}"#,
+                "运行",
+                "cargo test --quiet",
+            ),
+        ];
+        for (tool, args, want_name, want_detail) in cases {
+            let (name, detail) = tool_label(tool, args);
+            assert_eq!(name, want_name, "{tool}");
+            assert_eq!(detail, want_detail, "{tool}");
+        }
+        // 参数是坏的也不能 panic：模型偶尔会吐半截 JSON
+        let (name, detail) = tool_label("read_file", "{not json");
+        assert_eq!(name, "读取");
+        assert!(detail.is_empty());
     }
 }
