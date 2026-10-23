@@ -13,6 +13,7 @@ use crate::app::App;
 use crate::chat::Entry;
 use crate::commands::{display_value, env_override, source_label};
 use crate::config::{self, Thinking, mask_key};
+use crate::finding::{Finding, Fix};
 use crate::graphics::Graphics;
 use crate::llm::{ChatOptions, ChatResponse, LlmClient, Message, Role, StreamEvent};
 use crate::mode::Mode;
@@ -76,6 +77,10 @@ enum Msg {
     ScanProgress(u64, String),
     /// 第二段跑完了
     ScanAiDone(u64, Vec<crate::scan_ai::Judgement>, Vec<String>),
+    /// `/fix` 的进度
+    FixProgress(u64, String),
+    /// `/fix` 生成好了待确认的修复
+    FixesReady(u64, Vec<Finding>, Vec<Fix>),
     Tick,
 }
 
@@ -118,6 +123,8 @@ struct Session<'a> {
     always_apply: Arc<AtomicBool>,
     last_usage: String,
     cwd: String,
+    /// `/scan` 扫的目录；`/fix` 写文件时以它为基准，不能用错目录
+    scan_root: std::path::PathBuf,
     /// 终端原生图片（不支持时是空的，启动画面退回字标）
     gfx: Graphics,
     /// 启动画面只在还没开口时显示
@@ -181,6 +188,7 @@ async fn event_loop(app: &mut App, terminal: &mut DefaultTerminal, gfx: Graphics
         always_apply: Arc::new(AtomicBool::new(false)),
         last_usage: String::new(),
         cwd,
+        scan_root: std::env::current_dir().unwrap_or_else(|_| ".".into()),
         gfx,
         show_banner: true,
         repaint: false,
@@ -344,6 +352,7 @@ impl Session<'_> {
                     }
                 }
                 Action::DeleteSession(id) => self.delete_session(&id),
+                Action::ApplyFixes(fixes) => self.apply_fixes(fixes),
                 Action::Answer(answer) => self.answer(answer),
                 Action::CycleTheme => {
                     let theme = Theme::parse(&self.app.effective().theme).unwrap_or_default();
@@ -384,6 +393,30 @@ impl Session<'_> {
                 self.state.push(text);
             }
             Msg::Done(req, result) if req == self.req => self.finish_chat(result),
+            Msg::FixProgress(req, line) if req == self.req => {
+                self.state.push(Entry::Info(line));
+            }
+            Msg::FixesReady(req, findings, fixes) if req == self.req => {
+                self.finish_task();
+                if fixes.is_empty() {
+                    self.state.push(Entry::Warn(
+                        "没有生成出可用的修复：模型要么没改，要么返回的内容不完整".into(),
+                    ));
+                } else {
+                    // 计划模式或只读权限下照常给出 diff，但绝不落盘
+                    let reason = if self.state.mode == Mode::Plan {
+                        Some("计划模式只读".to_string())
+                    } else if matches!(
+                        self.app.effective().permission_mode,
+                        crate::tools::PermissionMode::ReadOnly
+                    ) {
+                        Some("权限模式是 readonly".to_string())
+                    } else {
+                        None
+                    };
+                    self.state.start_review(&findings, &fixes, reason);
+                }
+            }
             Msg::ScanProgress(req, line) if req == self.req => {
                 self.state.push(Entry::Info(line));
             }
@@ -412,7 +445,9 @@ impl Session<'_> {
             | Msg::Applied { .. }
             | Msg::ScanDone(..)
             | Msg::ScanProgress(..)
-            | Msg::ScanAiDone(..) => {
+            | Msg::ScanAiDone(..)
+            | Msg::FixProgress(..)
+            | Msg::FixesReady(..) => {
                 return false;
             }
         }
@@ -750,6 +785,168 @@ impl Session<'_> {
 
     /// `/sessions` 和 `/search` 共用：读一遍目录，把列表和正文开头交给面板，
     /// 之后过滤都在内存里做
+    /// `/fix [数量] [编号]`
+    ///
+    /// 拿 `/scan` 的结果去让模型生成修复，然后走逐条确认。真正写盘发生在
+    /// 用户按 y 之后（`Action::ApplyFixes`），这里一个字节都不动。
+    fn start_fix(&mut self, args: &[&str]) -> Result<()> {
+        if self.state.busy.is_some() {
+            bail!("正在忙，等这次结束或者按 Esc 取消");
+        }
+        if self.state.findings.is_empty() {
+            bail!("还没有扫描结果，先跑 /scan 或 /scan --ai");
+        }
+        // 只读时仍然生成 diff（看方案本身有价值），但不会落盘——
+        // 真正的拦截在 apply_fixes 之前：answer_review 直接返回 None
+        let readonly = matches!(
+            self.app.effective().permission_mode,
+            crate::tools::PermissionMode::ReadOnly
+        );
+        if readonly || self.state.mode == Mode::Plan {
+            self.state.push(Entry::Info(
+                "当前是计划模式 / 只读权限：会给出修复方案，但不会写入文件".into(),
+            ));
+        }
+
+        let limit = args
+            .iter()
+            .find_map(|a| a.parse::<usize>().ok())
+            .unwrap_or(5)
+            .clamp(1, 20);
+        let wanted = args.iter().find(|a| a.starts_with("VG-")).copied();
+
+        // 只挑文件真的存在、读得出来的发现
+        let mut picked: Vec<Finding> = Vec::new();
+        for f in &self.state.findings {
+            if picked.len() >= limit {
+                break;
+            }
+            if let Some(id) = wanted {
+                if f.id != id {
+                    continue;
+                }
+            }
+            let path = self.scan_root.join(&f.file);
+            if !path.is_file() {
+                continue;
+            }
+            picked.push(f.clone());
+        }
+        if picked.is_empty() {
+            bail!("没有可以修的发现（文件不存在，或者编号对不上）");
+        }
+
+        let client = LlmClient::new(&self.app.effective()).context("无法创建模型客户端")?;
+        let req = self.next_req();
+        let tx = self.tx.clone();
+        let root = self.scan_root.clone();
+        let total = picked.len();
+        self.state.busy = Some("生成修复中…".into());
+        self.state.push(Entry::Info(format!(
+            "正在为 {total} 个问题生成修复（每个问题一次请求，不会写文件）…"
+        )));
+
+        self.task = Some(tokio::spawn(async move {
+            let mut fixes = Vec::new();
+            let mut used: Vec<Finding> = Vec::new();
+            for (i, finding) in picked.into_iter().enumerate() {
+                let _ = tx.send(Msg::FixProgress(
+                    req,
+                    format!("修复 {}/{}：{} · {}:{}", i + 1, total, finding.title, finding.file, finding.line),
+                ));
+                let path = root.join(&finding.file);
+                let Ok(old) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                if old.len() > 120_000 {
+                    let _ = tx.send(Msg::FixProgress(
+                        req,
+                        format!("跳过 {}：文件太大（{} 字节）", finding.file, old.len()),
+                    ));
+                    continue;
+                }
+                let messages = [Message::user(crate::scan_ai::fix_prompt(&finding, &old))];
+                let opts = ChatOptions {
+                    json: true,
+                    max_tokens: Some(8000),
+                    tools: Vec::new(),
+                };
+                let Ok(resp) = client.chat(&messages, &opts).await else {
+                    continue;
+                };
+                let Ok(new) = crate::scan_ai::parse_fix(&resp.content) else {
+                    continue;
+                };
+                // 三道闸：没改、明显被截断、把文件删空，都不算修复
+                if new.trim() == old.trim() {
+                    let _ = tx.send(Msg::FixProgress(
+                        req,
+                        format!("跳过 {}：模型没改动任何内容", finding.file),
+                    ));
+                    continue;
+                }
+                if new.len() * 10 < old.len() * 6 {
+                    let _ = tx.send(Msg::FixProgress(
+                        req,
+                        format!(
+                            "跳过 {}：返回的内容只有原文的 {}%，像是被截断了",
+                            finding.file,
+                            new.len() * 100 / old.len().max(1)
+                        ),
+                    ));
+                    continue;
+                }
+                fixes.push(Fix {
+                    finding_id: finding.id.clone(),
+                    file: finding.file.clone(),
+                    old,
+                    new,
+                });
+                used.push(finding);
+            }
+            let _ = tx.send(Msg::FixesReady(req, used, fixes));
+        }));
+        Ok(())
+    }
+
+    /// 用户逐条确认之后真正落盘。写之前再读一次文件：确认期间文件被改过就跳过，
+    /// 不能用一份过期的 old 去覆盖别人的改动。
+    fn apply_fixes(&mut self, fixes: Vec<Fix>) {
+        let mut written = 0usize;
+        let mut problems: Vec<String> = Vec::new();
+        for fix in &fixes {
+            let path = self.scan_root.join(&fix.file);
+            match std::fs::read_to_string(&path) {
+                Ok(current) if current != fix.old => {
+                    problems.push(format!("{} 在确认期间被改过，已跳过", fix.file));
+                    continue;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    problems.push(format!("{} 读不出来：{e}", fix.file));
+                    continue;
+                }
+            }
+            match std::fs::write(&path, &fix.new) {
+                Ok(()) => {
+                    written += 1;
+                    self.state.push(Entry::Success(format!("已修复 {}", fix.file)));
+                }
+                Err(e) => problems.push(format!("{} 写入失败：{e}", fix.file)),
+            }
+        }
+        // 写成功的从待修列表里拿掉，免得下次 /fix 又提一遍
+        let done: Vec<&str> = fixes.iter().map(|f| f.finding_id.as_str()).collect();
+        self.state.findings.retain(|f| !done.contains(&f.id.as_str()));
+        if written > 0 {
+            self.state
+                .push(Entry::Success(format!("共写入 {written} 个文件")));
+        }
+        for p in problems {
+            self.state.push(Entry::Warn(p));
+        }
+    }
+
     /// `/scan [路径] [--ai]`
     ///
     /// 第一段（本地规则）永远跑，秒级、不花钱；加 `--ai` 才进第二段，
@@ -773,6 +970,7 @@ impl Session<'_> {
             None
         };
 
+        self.scan_root = root.clone();
         let req = self.next_req();
         let tx = self.tx.clone();
         self.state.push(Entry::Info(format!(
@@ -901,6 +1099,7 @@ impl Session<'_> {
             "clear" | "new" => self.new_conversation(),
             "resume" => self.resume_latest()?,
             "scan" => self.start_scan(&args)?,
+            "fix" => self.start_fix(&args)?,
             "sessions" | "history" => self.open_sessions_panel("")?,
             // 关键词直接带进面板的搜索框，进去还能继续改
             "search" => self.open_sessions_panel(&args.join(" "))?,

@@ -17,6 +17,7 @@ pub const COMMANDS: &[Candidate] = &[
     Candidate { name: "/model", desc: "配置 API 地址、API Key、模型与思考力度" },
     Candidate { name: "/mode", desc: "切换工作模式：计划 / 逐条确认 / 全自动" },
     Candidate { name: "/scan", desc: "扫描目录：本地规则；加 --ai 让模型逐条判定（/scan 路径 --ai）" },
+    Candidate { name: "/fix", desc: "为扫描结果生成修复，逐条确认后写入（/fix 数量 或 /fix VG-003）" },
     Candidate { name: "/theme", desc: "切换配色：dark / light（Ctrl-T）" },
     Candidate { name: "/font", desc: "切换字形：default / anime" },
     Candidate { name: "/permissions", desc: "配置权限模式和工作目录" },
@@ -57,6 +58,8 @@ pub enum Action {
     Answer(Answer),
     /// Ctrl-T：换一套配色
     CycleTheme,
+    /// 逐条确认结束，这些修复被接受了，去写文件
+    ApplyFixes(Vec<Fix>),
 }
 
 /// 逐条确认模式下的答复
@@ -117,6 +120,8 @@ pub struct AppState {
     pub sessions: Option<SessionsPanel>,
     /// 最近一次扫描的结果，`/fix` 之后会用到
     pub findings: Vec<Finding>,
+    /// 有值表示这一轮只走界面、不写文件，值就是原因（演示 / 计划模式 / 只读权限）
+    dry_run: Option<String>,
     /// `/model` 表单；打开时键盘输入都交给它
     form: Option<ModelForm>,
     /// 当前工作模式，决定 AI 能不能改文件、改之前要不要问
@@ -137,6 +142,7 @@ impl AppState {
             interrupted: false,
             sessions: None,
             findings: Vec::new(),
+            dry_run: None,
             form: None,
             mode: Mode::default(),
             confirm: None,
@@ -259,7 +265,9 @@ impl AppState {
     }
 
     /// 开始逐条确认：先显示汇总，再显示第一条
-    pub fn start_review(&mut self, findings: &[Finding], fixes: &[Fix]) {
+    /// `dry_run` 有值时只走界面、不写文件，值是给用户看的原因
+    pub fn start_review(&mut self, findings: &[Finding], fixes: &[Fix], dry_run: Option<String>) {
+        self.dry_run = dry_run;
         self.push(Entry::Summary(findings.to_vec()));
         let reviewer = Reviewer::new(findings, fixes);
         if reviewer.total() == 0 {
@@ -284,26 +292,34 @@ impl AppState {
         }
     }
 
-    fn answer_review(&mut self, decision: Decision) {
-        let Some(state) = &mut self.review else { return };
+    fn answer_review(&mut self, decision: Decision) -> Action {
+        let Some(state) = &mut self.review else {
+            return Action::None;
+        };
         state.reviewer.answer(decision);
         state.selected = 0;
         if state.reviewer.current().is_some() {
             self.show_current_review();
-            return;
+            return Action::None;
         }
-        let Some(state) = self.review.take() else { return };
+        let Some(state) = self.review.take() else {
+            return Action::None;
+        };
         let accepted = state.reviewer.into_accepted();
         if accepted.is_empty() {
             self.push(Entry::Info("没有选中任何修复".into()));
-        } else {
+            return Action::None;
+        }
+        if let Some(reason) = self.dry_run.take() {
             let names: Vec<_> = accepted.iter().map(|f| f.finding_id.as_str()).collect();
             self.push(Entry::Success(format!(
-                "已选中 {} 个修复：{}（演示模式，未写入文件）",
+                "已选中 {} 个修复：{}（未写入文件 · {reason}）",
                 accepted.len(),
                 names.join("、")
             )));
+            return Action::None;
         }
+        Action::ApplyFixes(accepted)
     }
 
     // ---- 按键 ----
@@ -445,16 +461,16 @@ impl AppState {
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
                 state.selected = (state.selected + 1) % n
             }
-            KeyCode::Char('y') => self.answer_review(Decision::Apply),
-            KeyCode::Char('n') => self.answer_review(Decision::Skip),
-            KeyCode::Char('a') => self.answer_review(Decision::ApplyRest),
-            KeyCode::Char('q') | KeyCode::Esc => self.answer_review(Decision::Quit),
+            KeyCode::Char('y') => return self.answer_review(Decision::Apply),
+            KeyCode::Char('n') => return self.answer_review(Decision::Skip),
+            KeyCode::Char('a') => return self.answer_review(Decision::ApplyRest),
+            KeyCode::Char('q') | KeyCode::Esc => return self.answer_review(Decision::Quit),
             KeyCode::Enter => {
                 let decision = REVIEW_OPTIONS[state.selected].2;
-                self.answer_review(decision);
+                return self.answer_review(decision);
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.answer_review(Decision::Quit)
+                return self.answer_review(Decision::Quit)
             }
             _ => {}
         }
@@ -596,7 +612,7 @@ impl AppState {
 pub fn start_demo(app: &mut AppState) {
     let (findings, fixes) = review::demo_data();
     app.push(Entry::Warn("演示模式：以下是示例数据，不会读取或修改任何文件".into()));
-    app.start_review(&findings, &fixes);
+    app.start_review(&findings, &fixes, Some("演示数据".into()));
 }
 
 #[cfg(test)]
@@ -1036,9 +1052,32 @@ mod tests {
     }
 
     #[test]
+    fn a_real_review_hands_the_accepted_fixes_to_the_caller() {
+        let (findings, fixes) = crate::review::demo_data();
+        let mut app = AppState::new();
+        app.start_review(&findings, &fixes, None);
+        // 第一项按 y 应用，第二项起「全部应用」
+        assert_eq!(app.on_key(key(KeyCode::Char('y'))), Action::None);
+        match app.on_key(key(KeyCode::Char('a'))) {
+            // 第一条按 y、后两条按 a，三份都要交给调用方去写
+            Action::ApplyFixes(f) => assert_eq!(f.len(), 3),
+            other => panic!("{other:?}"),
+        }
+        assert!(app.review.is_none());
+    }
+
+    #[test]
+    fn a_demo_review_never_asks_to_write_files() {
+        let mut app = AppState::new();
+        start_demo(&mut app);
+        assert_eq!(app.on_key(key(KeyCode::Char('a'))), Action::None, "演示数据不能落盘");
+        assert!(texts(&app).contains("演示模式"));
+    }
+
+    #[test]
     fn review_with_no_pairs_does_not_open_a_menu() {
         let mut app = AppState::new();
-        app.start_review(&[], &[]);
+        app.start_review(&[], &[], None);
         assert!(app.review.is_none());
         assert!(texts(&app).contains("没有可确认的修复"));
     }
@@ -1089,11 +1128,11 @@ mod tests {
     #[test]
     fn only_the_commands_that_actually_work_are_listed() {
         let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
-        // /scan 现在真的能扫了；/fix 和 /report 还没有实现，不列出来误导人
-        assert!(names.contains(&"/scan"), "扫描已经能跑，命令该回到列表里");
-        for gone in ["/fix", "/report"] {
-            assert!(!names.contains(&gone), "{gone} 还没实现，不该出现");
+        // /scan 和 /fix 现在都能真的干活；/report 还没有，不列出来误导人
+        for done in ["/scan", "/fix"] {
+            assert!(names.contains(&done), "{done} 已经能用，命令该在列表里");
         }
+        assert!(!names.contains(&"/report"), "/report 还没实现，不该出现");
         assert!(names.contains(&"/mode"));
     }
 

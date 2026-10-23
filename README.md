@@ -102,6 +102,10 @@ Early, but no longer a demo. Working today:
   can only be confirmed by running the service (rate limits, brute force, IDOR) are labelled
   `undetermined` rather than quietly passed.
 
+- **`/fix [n]`** — asks the model for a fixed version of each file, shows the diff, and writes
+  nothing until you press `y`. In `plan` mode it still shows you the diff, it just never writes.
+  Files that changed on disk while you were reviewing are skipped rather than overwritten.
+
 Every scan reports exactly how much of the checklist it covered, so "clean" and "not looked at"
 never look the same.
 

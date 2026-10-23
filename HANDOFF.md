@@ -93,6 +93,7 @@ Be precise about this: the conversational core is real, the scanner is a skeleto
 | `vibeguard config show / init / set`, `vibeguard ping` | ✓ works |
 | `/scan [path]` — 20 local rules over the 410-item checklist | ✓ works, read-only, `file:line` + CWE |
 | `/scan --ai` — model judges the remaining 390 items, 60 per batch | ✓ works, costs tokens |
+| `/fix` — model writes the fix, you approve the diff, then it is written | ✓ works, never writes without approval |
 | `/demo` — scan → report → per-fix review screens | ~ sample data only, touches no files |
 | CI, packaging, licence | ✗ not yet |
 

@@ -270,6 +270,48 @@ pub fn prompt(batch: &Batch, digest: &Digest) -> String {
     out
 }
 
+/// 让模型给出修复后的**完整文件**。返回整个文件而不是 diff，
+/// 是因为 diff 的上下文对不上时应用会失败，而全文替换是幂等的。
+pub fn fix_prompt(finding: &crate::finding::Finding, content: &str) -> String {
+    format!(
+        "你是安全工程师，正在修一个具体的安全问题。\n\n         文件：{file}\n         问题：[{id}] {title}\n         位置：第 {line} 行\n         说明：{desc}\n         修复要点：{fix}\n\n         要求：\n         1. 只改和这个问题相关的代码，其余原样保留，不要顺手重构、不要改格式。\n         2. 返回**修好之后的完整文件**，不要省略、不要用「...」代替、不要只给片段。\n         3. 如果这个文件里其实没有问题，把 content 原样返回，并在 note 里说明理由。\n\n         以 json 输出：{{\"content\":\"完整文件内容\",\"note\":\"改了什么\"}}\n\n         文件全文：\n```\n{content}\n```",
+        file = finding.file,
+        id = finding.description.split(']').next().unwrap_or("").trim_start_matches('['),
+        title = finding.title,
+        line = finding.line,
+        desc = finding.description,
+        fix = finding.suggestion,
+    )
+}
+
+/// 解析修复结果。模型有时不守 json 的约定，直接吐一段带围栏的代码，这里一并接住。
+pub fn parse_fix(text: &str) -> Result<String> {
+    #[derive(Deserialize)]
+    struct Raw {
+        content: String,
+    }
+    if let Some(start) = text.find('{') {
+        if let Some(end) = text.rfind('}') {
+            if end > start {
+                if let Ok(raw) = serde_json::from_str::<Raw>(&text[start..=end]) {
+                    return Ok(raw.content);
+                }
+            }
+        }
+    }
+    // 退路：剥掉代码块围栏，整段当文件内容
+    let trimmed = text.trim();
+    if trimmed.starts_with("```") {
+        let body = trimmed
+            .split_once('\n')
+            .map(|(_, rest)| rest)
+            .unwrap_or(trimmed);
+        let body = body.strip_suffix("```").unwrap_or(body);
+        return Ok(body.trim_end().to_string());
+    }
+    anyhow::bail!("模型没有返回可以解析的文件内容")
+}
+
 #[derive(Deserialize)]
 struct Raw {
     results: Vec<RawItem>,
@@ -482,6 +524,39 @@ mod tests {
         assert_eq!(f[0].line, 42);
         assert_eq!(f[0].severity, crate::finding::Severity::Critical);
         assert!(f[0].description.contains("AUTHZ-01"));
+    }
+
+    #[test]
+    fn fix_prompt_carries_the_file_and_forbids_shortcuts() {
+        let f = crate::finding::Finding {
+            id: "VG-001".into(),
+            severity: crate::finding::Severity::Critical,
+            title: "硬编码密钥".into(),
+            cwe: Some("CWE-798".into()),
+            file: "app.py".into(),
+            line: 3,
+            description: "[CONF-01] 密钥写死".into(),
+            suggestion: "改从环境变量读".into(),
+        };
+        let p = fix_prompt(&f, "API_KEY = \"sk-1\"\n");
+        assert!(p.contains("app.py"));
+        assert!(p.contains("CONF-01"), "要把清单编号告诉模型");
+        assert!(p.contains("完整文件"), "必须要求返回全文，否则没法整体替换");
+        assert!(p.contains("API_KEY"));
+        assert!(p.contains("json"));
+    }
+
+    #[test]
+    fn parse_fix_takes_json_or_a_fenced_block() {
+        assert_eq!(
+            parse_fix(r#"{"content":"line1\nline2","note":"改好了"}"#).unwrap(),
+            "line1\nline2"
+        );
+        assert_eq!(
+            parse_fix("```python\nprint(1)\n```").unwrap(),
+            "print(1)"
+        );
+        assert!(parse_fix("我不知道").is_err(), "解析不了就要报错，不能瞎猜");
     }
 
     #[test]
