@@ -804,41 +804,81 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 /// 拼提示词。`json` 这个词必须出现，否则 DeepSeek 的 json 模式会报错。
+/// 判定的系统提示词（中文界面）。
+///
+/// 和英文版逐条对应。改了一边就要改另一边——两边漂移的话，
+/// 同一个仓库在两种界面下会得到不一样的结论，那比语言混排更难查。
+const JUDGE_ZH: &str = "你是安全审计员，正在审计一个可能由 AI 生成的代码库（vibe coding）。\
+     \n下面给出仓库文件树、与本批条目相关的代码，以及一批需要你判断的漏洞核对条目。\
+     \n代码是按关键词挑出来的，可能不完整；看不出来就写 undetermined。\n\n\
+     对每一条，判断它在本仓库中的状态，并给出证据：\n\
+     - exists：你确实看到了有问题的代码\n\
+     - suspected：看起来像，但证据不足\n\
+     - not_found：看了相关代码，没有这个问题\n\
+     - undetermined：需要把服务跑起来发请求才能确认（限流、爆破、越权、响应头等）\n\n\
+     硬性要求：\n\
+     1. 每一条都必须给 evidence：`文件:行号`；确实判断不了的，写清楚缺什么信息。\n\
+     2. 不要跳过任何条目，不要编造条目。\n\
+     3. **同一个问题只报一条**：多条清单项指的是同一处代码或同一个事实时，\
+     选最贴切的那条报 exists/suspected，其余写 not_found，reason 写「与 XX 同源」。\
+     不要为了凑数把一处问题贴到七八个条目上。\n\
+     4. **仓库里没有的东西直接写 not_found**：没有 Agent、没有 K8s、没有前端，\
+     就如实说没有，不要拿别处的问题去顶。\n\
+     5. 只输出 json，不要解释，也不要包代码块围栏。\n\n\
+     输出格式：\n\
+     {\"results\":[{\"id\":\"AUTH-01\",\"verdict\":\"exists\",\"evidence\":\"app.py:12\",\"reason\":\"一句话依据\"}]}\n\n";
+
+/// 判定的系统提示词（英文界面）。
+///
+/// 第 5 条是这次补的：清单条目本身是中文的，不点名的话模型会用中文写 reason，
+/// 英文界面里就变成一句英文标题配一段中文理由。
+const JUDGE_EN: &str = "You are a security auditor reviewing a codebase that was probably \
+     written by an AI (vibe coding).\nYou get the repository tree, the code related to this \
+     batch's checklist items, and the items themselves.\nThe code was picked by keyword, so it \
+     may be incomplete; if you cannot tell, answer undetermined.\n\nFor each item, decide its \
+     status in this repository and give evidence:\n\
+     - exists: you actually saw the vulnerable code\n\
+     - suspected: it looks like it, but the evidence is thin\n\
+     - not_found: you read the relevant code and the problem is not there\n\
+     - undetermined: confirming it needs the service running and requests sent (rate limiting, \
+     brute force, broken access control, response headers, ...)\n\nHard requirements:\n\
+     1. Every item needs evidence as `file:line`; if you truly cannot judge it, say what \
+     information is missing.\n\
+     2. Do not skip items and do not invent them.\n\
+     3. **Report each problem once**: when several checklist items describe the same piece of \
+     code or the same fact, report the closest one as exists/suspected and mark the rest \
+     not_found with reason \"same root cause as XX\". Do not staple one problem onto seven items \
+     to pad the count.\n\
+     4. **Anything that is not in this repository is not_found**: no agent, no Kubernetes, no \
+     frontend means say so; do not substitute a problem from elsewhere.\n\
+     5. Write every `reason` in English, even though the checklist items are in Chinese.\n\
+     6. Output json only, no explanation, no code fences.\n\nOutput format:\n\
+     {\"results\":[{\"id\":\"AUTH-01\",\"verdict\":\"exists\",\"evidence\":\"app.py:12\",\
+     \"reason\":\"one-line justification\"}]}\n\n";
+
 pub fn prompt(batch: &Batch, index: &Index) -> String {
     // 这一批要看的代码：按条目关键词从索引里检索出来，而不是全仓库一份摘要
     let files = index.retrieve(batch, RETRIEVE_BUDGET);
     let mut out = String::new();
-    out.push_str(
-        "你是安全审计员，正在审计一个可能由 AI 生成的代码库（vibe coding）。\n\
-         下面给出仓库文件树、与本批条目相关的代码，以及一批需要你判断的漏洞核对条目。\n\
-         代码是按关键词挑出来的，可能不完整；看不出来就写 undetermined。\n\n\
-         对每一条，判断它在本仓库中的状态，并给出证据：\n\
-         - exists：你确实看到了有问题的代码\n\
-         - suspected：看起来像，但证据不足\n\
-         - not_found：看了相关代码，没有这个问题\n\
-         - undetermined：需要把服务跑起来发请求才能确认（限流、爆破、越权、响应头等）\n\n\
-         硬性要求：\n\
-         1. 每一条都必须给 evidence：`文件:行号`；确实判断不了的，写清楚缺什么信息。\n\
-         2. 不要跳过任何条目，不要编造条目。\n\
-         3. **同一个问题只报一条**：多条清单项指的是同一处代码或同一个事实时，\
-         选最贴切的那条报 exists/suspected，其余写 not_found，reason 写「与 XX 同源」。\
-         不要为了凑数把一处问题贴到七八个条目上。\n\
-         4. **仓库里没有的东西直接写 not_found**：没有 Agent、没有 K8s、没有前端，\
-         就如实说没有，不要拿别处的问题去顶。\n\
-         5. 只输出 json，不要解释，也不要包代码块围栏。\n\n\
-         输出格式：\n\
-         {\"results\":[{\"id\":\"AUTH-01\",\"verdict\":\"exists\",\"evidence\":\"app.py:12\",\"reason\":\"一句话依据\"}]}\n\n",
-    );
+    out.push_str(if crate::i18n::is_zh() {
+        JUDGE_ZH
+    } else {
+        JUDGE_EN
+    });
 
     out.push_str(tr("## 仓库文件树\n```\n"));
     out.push_str(&index.tree);
     out.push_str("\n```\n\n");
 
     if files.is_empty() {
-        out.push_str(
+        out.push_str(&pick(
             "## 相关代码\n（这个仓库里没找到和本批条目相关的代码。\
-             判断不了就写 undetermined，并在 reason 里说明缺什么。）\n\n",
-        );
+             判断不了就写 undetermined，并在 reason 里说明缺什么。）\n\n"
+                .to_string(),
+            "## Related code\n(This repository has no code related to this batch. If you cannot \
+             judge an item, answer undetermined and say in the reason what is missing.)\n\n"
+                .to_string(),
+        ));
     } else {
         out.push_str(tr(
             "## 与本批条目相关的代码（按关键词检索挑出来的，不是全部）\n",
@@ -1757,5 +1797,46 @@ mod tests {
         );
         assert_eq!(split_evidence("见 app.py"), ("见 app.py".into(), 0));
         assert_eq!(split_evidence("需要运行验证"), ("需要运行验证".into(), 0));
+    }
+
+    fn has_han(s: &str) -> bool {
+        s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+    }
+
+    /// 英文界面下发出去的第一句话必须是英文。清单条目本身是中文的，
+    /// 所以只能要求「指令」这一块干净——否则模型会用中文写 reason。
+    #[test]
+    fn the_english_judge_prompt_is_actually_english() {
+        assert!(!has_han(JUDGE_EN), "英文提示词里混进了中文：{JUDGE_EN}");
+        assert!(JUDGE_EN.contains("Write every `reason` in English"));
+    }
+
+    /// 四个判定词是解析器认的字面量，两版提示词必须用同一套，
+    /// 否则中文界面能跑、英文界面全变 undetermined
+    #[test]
+    fn both_prompts_use_the_same_verdict_words() {
+        for word in ["exists", "suspected", "not_found", "undetermined"] {
+            assert!(JUDGE_ZH.contains(word), "中文版缺 {word}");
+            assert!(JUDGE_EN.contains(word), "英文版缺 {word}");
+        }
+    }
+
+    /// 光有常量没用，得真的接进 prompt()
+    #[test]
+    fn the_prompt_starts_with_one_of_the_two_system_blocks() {
+        let list = VulnChecklist::new();
+        let batch = batches_with(&list, &[], 5, &['A'])
+            .into_iter()
+            .next()
+            .expect("至少一批");
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("app.py"), "x = 1\n").unwrap();
+        let index = Index::build(dir.path());
+        let p = prompt(&batch, &index);
+        assert!(
+            p.starts_with(JUDGE_ZH) || p.starts_with(JUDGE_EN),
+            "系统提示词没接上：{}",
+            &p[..p.len().min(80)]
+        );
     }
 }
