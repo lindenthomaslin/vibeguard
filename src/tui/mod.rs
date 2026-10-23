@@ -464,9 +464,29 @@ impl Session<'_> {
                 // 两段的结果合成一份，`/fix` 以后只看 state.findings
                 let seq = self.state.findings.len();
                 let list = crate::vuln_checklist::VulnChecklist::new();
-                self.state
-                    .findings
-                    .extend(crate::scan_ai::to_findings(&judgements, &list, seq));
+                // 模型给的「文件:行号」先核实再收：核实不了的宁可不报，
+                // 一条指错地方的高危发现比没有更浪费时间
+                let merged = crate::scan_ai::to_findings(&self.scan_root, &judgements, &list, seq);
+                self.state.findings.extend(merged.findings);
+                self.state.unverified = merged
+                    .unverified
+                    .iter()
+                    .map(|(id, ev, why)| format!("{id} {ev}（{why}）"))
+                    .collect();
+                if !self.state.unverified.is_empty() {
+                    let shown: Vec<&str> = self
+                        .state
+                        .unverified
+                        .iter()
+                        .take(3)
+                        .map(String::as_str)
+                        .collect();
+                    self.state.push(Entry::Warn(format!(
+                        "{} 条判定的证据核实不了，已剔除（{}）",
+                        self.state.unverified.len(),
+                        shown.join("；")
+                    )));
+                }
                 self.state.judgements = judgements.clone();
                 self.state.failed_batches = failed.clone();
                 self.state.push(Entry::ScanAi { judgements, failed });
@@ -1101,6 +1121,7 @@ impl Session<'_> {
             checklist_total: crate::vuln_checklist::VulnChecklist::new().len(),
             files_scanned: self.state.files_scanned,
             failed: self.state.failed_batches.clone(),
+            unverified: self.state.unverified.clone(),
         };
         let md = crate::report::markdown(&self.state.findings, &self.state.judgements, &meta);
         let js = crate::report::json(&self.state.findings, &self.state.judgements, &meta);

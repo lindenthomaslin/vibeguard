@@ -564,35 +564,115 @@ pub fn split_evidence(evidence: &str) -> (String, u32) {
 
 /// 把「存在 / 疑似」的判定并进 `Finding` 列表，和本地规则的结果放一起，
 /// 后面 `/fix` 就能统一处理。严重级别和修复建议都从清单取。
+/// 一条判定在磁盘上的落地情况
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Evidence {
+    pub file: String,
+    pub line: u32,
+    /// 那一行的原文（读得到才有）
+    pub text: Option<String>,
+    /// 核实不了的原因；`None` 表示这一条站得住
+    pub problem: Option<String>,
+}
+
+/// 核实「文件:行号」是不是真的存在。
+///
+/// 模型给出的位置经常是错的——文件不存在、行号超出范围、或者行号对但内容
+/// 根本不是它说的那回事。不核实的话，报告里就会出现「IDOR 在 app.py:11」，
+/// 而那一行是个纯函数。核实很便宜（读一次文件），收益是报告里每一条都能点开看。
+pub fn verify_evidence(root: &Path, evidence: &str) -> Evidence {
+    let (file, line) = split_evidence(evidence);
+    let text = match std::fs::read_to_string(root.join(&file)) {
+        Ok(t) => t,
+        Err(_) => {
+            return Evidence {
+                file,
+                line,
+                text: None,
+                problem: Some("文件不存在".into()),
+            };
+        }
+    };
+    let rows: Vec<&str> = text.lines().collect();
+    let idx = line as usize;
+    if idx == 0 || idx > rows.len() {
+        return Evidence {
+            file,
+            line,
+            text: None,
+            problem: Some(format!("文件只有 {} 行", rows.len())),
+        };
+    }
+    Evidence {
+        file,
+        line,
+        text: Some(rows[idx - 1].trim().to_string()),
+        problem: None,
+    }
+}
+
+/// 合并后的结果：能定位到代码的，以及定位不到的
+pub struct Merged {
+    pub findings: Vec<crate::finding::Finding>,
+    /// (清单编号, 模型给的证据, 核实不了的原因)
+    pub unverified: Vec<(String, String, String)>,
+}
+
 pub fn to_findings(
+    root: &Path,
     judgements: &[Judgement],
     checklist: &VulnChecklist,
     seq_start: usize,
-) -> Vec<crate::finding::Finding> {
-    judgements
+) -> Merged {
+    let mut findings = Vec::new();
+    let mut unverified = Vec::new();
+    let mut seen: std::collections::BTreeSet<(String, String, u32)> = Default::default();
+
+    for j in judgements
         .iter()
         .filter(|j| matches!(j.verdict, Verdict::Exists | Verdict::Suspected))
-        .enumerate()
-        .filter_map(|(i, j)| {
-            let item = checklist.get(&j.id)?;
-            let (file, line) = split_evidence(&j.evidence);
-            Some(crate::finding::Finding {
-                id: format!("VG-{:03}", seq_start + i + 1),
-                severity: item.severity,
-                title: item.title.clone(),
-                cwe: item.cwe.clone(),
-                file,
-                line,
-                description: format!(
-                    "[{}] 模型判定为「{}」：{}",
-                    j.id,
-                    j.verdict.label(),
-                    j.reason
-                ),
-                suggestion: item.fix_point.clone(),
+    {
+        let Some(item) = checklist.get(&j.id) else {
+            continue;
+        };
+        let ev = verify_evidence(root, &j.evidence);
+        if let Some(problem) = ev.problem {
+            unverified.push((j.id.clone(), j.evidence.clone(), problem));
+            continue;
+        }
+        // 同一条清单项落在同一行，只留一条：模型经常把同一个问题换个说法重复报
+        if !seen.insert((j.id.clone(), ev.file.clone(), ev.line)) {
+            continue;
+        }
+        let code = ev
+            .text
+            .as_deref()
+            .map(|t| {
+                let clipped: String = t.chars().take(90).collect();
+                format!(" · 该行：`{clipped}`")
             })
-        })
-        .collect()
+            .unwrap_or_default();
+        findings.push(crate::finding::Finding {
+            id: format!("VG-{:03}", seq_start + findings.len() + 1),
+            severity: item.severity,
+            title: item.title.clone(),
+            cwe: item.cwe.clone(),
+            file: ev.file,
+            line: ev.line,
+            description: format!(
+                "[{}] 模型判定为「{}」：{}{}",
+                j.id,
+                j.verdict.label(),
+                j.reason,
+                code
+            ),
+            suggestion: item.fix_point.clone(),
+        });
+    }
+    Merged {
+        findings,
+        unverified,
+    }
 }
 
 #[cfg(test)]
@@ -706,12 +786,15 @@ mod tests {
 
     #[test]
     fn only_exists_and_suspected_become_findings() {
+        let repo = tempdir().unwrap();
+        fs::create_dir_all(repo.path().join("api")).unwrap();
+        fs::write(repo.path().join("api/orders.py"), "a\nb\nc\n").unwrap();
         let list = VulnChecklist::new();
         let js = vec![
             Judgement {
                 id: "AUTHZ-01".into(),
                 verdict: Verdict::Exists,
-                evidence: "api/orders.py:42".into(),
+                evidence: "api/orders.py:2".into(),
                 reason: "查询没带 owner 条件".into(),
             },
             Judgement {
@@ -727,12 +810,76 @@ mod tests {
                 reason: "清单里没有这个编号".into(),
             },
         ];
-        let f = to_findings(&js, &list, 0);
-        assert_eq!(f.len(), 1, "无法判断的不算发现，编号不存在的也要丢掉");
-        assert_eq!(f[0].file, "api/orders.py");
-        assert_eq!(f[0].line, 42);
-        assert_eq!(f[0].severity, crate::finding::Severity::Critical);
-        assert!(f[0].description.contains("AUTHZ-01"));
+        let m = to_findings(repo.path(), &js, &list, 0);
+        assert_eq!(
+            m.findings.len(),
+            1,
+            "无法判断的不算发现，编号不存在的也要丢掉"
+        );
+        let f = &m.findings[0];
+        assert_eq!(f.file, "api/orders.py");
+        assert_eq!(f.line, 2);
+        assert_eq!(f.severity, crate::finding::Severity::Critical);
+        assert!(f.description.contains("AUTHZ-01"));
+        // 报告里带上那一行的原文，用户一眼就能判断真假
+        assert!(f.description.contains("该行：`b`"), "{}", f.description);
+    }
+
+    #[test]
+    fn evidence_pointing_at_nothing_is_dropped_and_reported() {
+        let repo = tempdir().unwrap();
+        fs::write(repo.path().join("app.py"), "line1\nline2\n").unwrap();
+        let list = VulnChecklist::new();
+        let js = vec![
+            Judgement {
+                id: "AUTHZ-01".into(),
+                verdict: Verdict::Exists,
+                evidence: "app.py:99".into(),
+                reason: "行号是编的".into(),
+            },
+            Judgement {
+                id: "AUTH-01".into(),
+                verdict: Verdict::Suspected,
+                evidence: "nope.py:3".into(),
+                reason: "文件根本不存在".into(),
+            },
+        ];
+        let m = to_findings(repo.path(), &js, &list, 0);
+        assert!(m.findings.is_empty(), "核实不了的不能进结果");
+        assert_eq!(m.unverified.len(), 2);
+        assert!(
+            m.unverified[0].2.contains("只有 2 行"),
+            "{:?}",
+            m.unverified
+        );
+        assert!(
+            m.unverified[1].2.contains("文件不存在"),
+            "{:?}",
+            m.unverified
+        );
+    }
+
+    #[test]
+    fn the_same_item_on_the_same_line_is_reported_once() {
+        let repo = tempdir().unwrap();
+        fs::write(repo.path().join("a.py"), "x\ny\n").unwrap();
+        let list = VulnChecklist::new();
+        let js = vec![
+            Judgement {
+                id: "AUTHZ-01".into(),
+                verdict: Verdict::Exists,
+                evidence: "a.py:1".into(),
+                reason: "第一次".into(),
+            },
+            Judgement {
+                id: "AUTHZ-01".into(),
+                verdict: Verdict::Suspected,
+                evidence: "a.py:1".into(),
+                reason: "换个说法又说一遍".into(),
+            },
+        ];
+        let m = to_findings(repo.path(), &js, &list, 0);
+        assert_eq!(m.findings.len(), 1, "同一条清单项同一行只留一条");
     }
 
     #[test]

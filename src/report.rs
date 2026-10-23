@@ -27,6 +27,8 @@ pub struct Meta {
     pub files_scanned: usize,
     /// 判定失败的批次：有值就说明这次覆盖不完整
     pub failed: Vec<String>,
+    /// 证据核实不了、已剔除的条目：报告里必须写，否则数字对不上
+    pub unverified: Vec<String>,
 }
 
 impl Meta {
@@ -62,6 +64,17 @@ pub fn markdown(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> 
         ));
         for f in &meta.failed {
             out.push_str(&format!("> - {f}\n"));
+        }
+        out.push('\n');
+    }
+
+    if !meta.unverified.is_empty() {
+        out.push_str(&format!(
+            "\n> ⚠ 有 {} 条模型判定找不到对应代码（文件不存在或行号超范围），**已从下面的清单里剔除**。\n> 剔除不等于没问题：这些条目可能确实存在，只是模型指错了地方，值得手工看一眼。\n\n",
+            meta.unverified.len()
+        ));
+        for u in &meta.unverified {
+            out.push_str(&format!("> - {u}\n"));
         }
         out.push('\n');
     }
@@ -165,6 +178,8 @@ struct Coverage {
     checklist_total: usize,
     covered: usize,
     failed_batches: Vec<String>,
+    /// 证据核实不了、已剔除的条目
+    unverified: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -195,6 +210,7 @@ pub fn json(findings: &[Finding], judgements: &[Judgement], meta: &Meta) -> Stri
             checklist_total: meta.checklist_total,
             covered: meta.covered(judgements),
             failed_batches: meta.failed.clone(),
+            unverified: meta.unverified.clone(),
         },
         summary: counts(findings)
             .into_iter()
@@ -237,6 +253,7 @@ mod tests {
             checklist_total: 410,
             files_scanned: 6,
             failed: Vec::new(),
+            unverified: Vec::new(),
         }
     }
 
@@ -288,6 +305,21 @@ mod tests {
         assert!(md.contains("1 条被判为「无法判断」"));
         assert!(md.contains("不要把它们当成「没问题」"));
         assert!(md.contains("清单覆盖 | 21/410"), "模型判过的也要算进覆盖");
+    }
+
+    #[test]
+    fn unverified_evidence_is_called_out_in_both_formats() {
+        let mut m = meta();
+        m.unverified = vec!["AUTHZ-01 api/orders.py:99（文件只有 40 行）".into()];
+        let md = markdown(&[], &[], &m);
+        assert!(md.contains("找不到对应代码"), "{md}");
+        assert!(md.contains("剔除不等于没问题"), "别让人以为剔除就是没事了");
+        assert!(md.contains("AUTHZ-01 api/orders.py:99"));
+        let v: serde_json::Value = serde_json::from_str(&json(&[], &[], &m)).unwrap();
+        assert_eq!(
+            v["coverage"]["unverified"][0],
+            "AUTHZ-01 api/orders.py:99（文件只有 40 行）"
+        );
     }
 
     #[test]
