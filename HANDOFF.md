@@ -96,6 +96,7 @@ Be precise about this: the conversational core is real, the scanner is a skeleto
 | `/fix` — model writes the fix, you approve the diff, then it is written | ✓ works, never writes without approval |
 | `/report` — `vibeguard-report.md` + `.json`, both stating coverage | ✓ works |
 | `/findings` — reload the last scan for a directory, with per-file staleness | ✓ works |
+| Incremental `/scan --ai` — unchanged repo costs 0 requests, one changed file costs 3 | ✓ works |
 | `/demo` — scan → report → per-fix review screens | ~ sample data only, touches no files |
 | CI, packaging, licence | ✗ not yet |
 
@@ -329,9 +330,10 @@ Conventions worth keeping:
 3. **One conversation open at a time.** Opening a session replaces the current one.
 4. **The runtime tier is not covered.** ~158 of the 410 checklist items can only be confirmed by
    sending requests at a running service. The tool labels them `undetermined` and stops there.
-5. **No incremental scan.** `/scan --ai` re-judges all 390 items every time. Knowing which files
-   changed since the last run would let it skip most of them — the fingerprints for that are
-   already stored, the batching is not.
+5. **The incremental pass still re-asks every item.** It shrinks what the model *sees* (only the
+   changed files) and how many requests it takes (3 instead of 7), but it cannot skip items:
+   any checklist entry could apply to a newly written file. Item-level skipping would need a
+   per-item file mapping that the checklist does not have.
 
 ---
 

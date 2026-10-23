@@ -184,6 +184,8 @@ pub struct AppState {
     pub failed_batches: Vec<String>,
     /// 扫描时每个文件的指纹：用来判断「这条发现还准不准」
     pub fingerprints: std::collections::BTreeMap<String, crate::scan_store::Fingerprint>,
+    /// 这次判定所依据的仓库快照，增量扫描靠它判断哪些文件变过
+    pub digest: Option<crate::scan_ai::ScanDigest>,
     /// 有值表示这一轮只走界面、不写文件，值就是原因（演示 / 计划模式 / 只读权限）
     dry_run: Option<String>,
     /// `/model` 表单；打开时键盘输入都交给它
@@ -210,6 +212,7 @@ impl AppState {
             files_scanned: 0,
             failed_batches: Vec::new(),
             fingerprints: std::collections::BTreeMap::new(),
+            digest: None,
             dry_run: None,
             form: None,
             mode: Mode::default(),

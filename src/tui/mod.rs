@@ -79,8 +79,13 @@ enum Msg {
     ScanDone(u64, crate::scan::LocalReport),
     /// 第二段的进度：第几批、判什么
     ScanProgress(u64, String),
-    /// 第二段跑完了
-    ScanAiDone(u64, Vec<crate::scan_ai::Judgement>, Vec<String>),
+    /// 第二段跑完了（判定、失败批次、这次依据的仓库快照）
+    ScanAiDone(
+        u64,
+        Vec<crate::scan_ai::Judgement>,
+        Vec<String>,
+        crate::scan_ai::ScanDigest,
+    ),
     /// `/fix` 的进度
     FixProgress(u64, String),
     /// `/fix` 生成好了待确认的修复
@@ -430,8 +435,9 @@ impl Session<'_> {
             Msg::ScanProgress(req, line) if req == self.req => {
                 self.state.push(Entry::Info(line));
             }
-            Msg::ScanAiDone(req, judgements, failed) if req == self.req => {
+            Msg::ScanAiDone(req, judgements, failed, digest) if req == self.req => {
                 self.finish_task();
+                self.state.digest = Some(digest);
                 // 两段的结果合成一份，`/fix` 以后只看 state.findings
                 let seq = self.state.findings.len();
                 let list = crate::vuln_checklist::VulnChecklist::new();
@@ -828,6 +834,13 @@ impl Session<'_> {
             judgements: self.state.judgements.clone(),
             failed_batches: self.state.failed_batches.clone(),
             fingerprints,
+            digest_hash: self.state.digest.as_ref().map(|d| d.hash).unwrap_or(0),
+            digest_files: self
+                .state
+                .digest
+                .as_ref()
+                .map(|d| d.files.clone())
+                .unwrap_or_default(),
         };
         let store = crate::scan_store::ScanStore::beside_config(&self.app.config_path);
         match store.save(&scan) {
@@ -864,6 +877,10 @@ impl Session<'_> {
         self.state.failed_batches = scan.failed_batches.clone();
         self.state.files_scanned = scan.files_scanned;
         self.state.fingerprints = scan.fingerprints.clone();
+        self.state.digest = Some(crate::scan_ai::ScanDigest {
+            hash: scan.digest_hash,
+            files: scan.digest_files.clone(),
+        });
         self.scan_id = Some(scan.id.clone());
         self.scan_started = scan.created;
 
@@ -1202,6 +1219,7 @@ impl Session<'_> {
         ));
         let req = self.next_req();
         let tx = self.tx.clone();
+        let config_path = self.app.config_path.clone();
         self.state.push(Entry::Info(format!(
             "正在扫描 {}（本地规则，只读）…",
             ui::tilde(&root)
@@ -1223,7 +1241,7 @@ impl Session<'_> {
 
             let Some(client) = client else { return };
             let digest_root = root.clone();
-            let Ok(digest) =
+            let Ok(full) =
                 tokio::task::spawn_blocking(move || crate::scan_ai::digest(&digest_root)).await
             else {
                 let _ = tx.send(Msg::ScanProgress(
@@ -1232,9 +1250,101 @@ impl Session<'_> {
                 ));
                 return;
             };
+            let snapshot = crate::scan_ai::ScanDigest {
+                hash: full.hash(),
+                files: full.file_hashes(),
+            };
+
+            // 上次的存档：决定这一轮是「什么都不用判」「只判变过的」还是「全量」
+            let store = crate::scan_store::ScanStore::beside_config(&config_path);
+            let prev = store.latest_for(&root).ok().flatten();
+
+            if let Some(prev) = &prev
+                && prev.digest_hash != 0
+                && prev.digest_hash == snapshot.hash
+                && !prev.judgements.is_empty()
+            {
+                let _ = tx.send(Msg::ScanProgress(
+                    req,
+                    format!(
+                        "文件一个都没变：直接复用上次的 {} 条判定，这一轮不发任何请求",
+                        prev.judgements.len()
+                    ),
+                ));
+                let _ = tx.send(Msg::ScanAiDone(
+                    req,
+                    prev.judgements.clone(),
+                    prev.failed_batches.clone(),
+                    snapshot,
+                ));
+                return;
+            }
+
+            // 变过的文件（新增、内容变了、被删掉）
+            let mut changed: Vec<String> = Vec::new();
+            let mut incremental = false;
+            if let Some(prev) = &prev
+                && !prev.digest_files.is_empty()
+            {
+                changed.extend(
+                    snapshot
+                        .files
+                        .iter()
+                        .filter(|(path, hash)| prev.digest_files.get(*path) != Some(*hash))
+                        .map(|(path, _)| path.clone()),
+                );
+                changed.extend(
+                    prev.digest_files
+                        .keys()
+                        .filter(|path| !snapshot.files.contains_key(*path))
+                        .cloned(),
+                );
+                changed.sort();
+                changed.dedup();
+                incremental = !changed.is_empty();
+            }
+
+            // 增量时只把变过的文件正文给模型，文件树仍然给全
+            let digest = if incremental {
+                let scope_root = root.clone();
+                let scope_changed = changed.clone();
+                match tokio::task::spawn_blocking(move || {
+                    crate::scan_ai::scoped_digest(&scope_root, &scope_changed)
+                })
+                .await
+                {
+                    Ok(d) => d,
+                    Err(_) => full,
+                }
+            } else {
+                full
+            };
+
+            if incremental {
+                let _ = tx.send(Msg::ScanProgress(
+                    req,
+                    format!(
+                        "有 {} 个文件变过，只把它们重新交给模型（其余文件沿用上次结论）：{}",
+                        changed.len(),
+                        changed
+                            .iter()
+                            .take(3)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join("、")
+                    ),
+                ));
+            }
 
             let checklist = crate::vuln_checklist::VulnChecklist::new();
-            let batches = crate::scan_ai::batches(&checklist, &crate::scan::covered_ids());
+            // 增量时摘要小，一批能多装几条，请求数也跟着降
+            let size = if incremental {
+                crate::scan_ai::BATCH_INCREMENTAL
+            } else {
+                crate::scan_ai::BATCH
+            };
+            let batches =
+                crate::scan_ai::batches_with(&checklist, &crate::scan::covered_ids(), size);
             let total = batches.len();
 
             // 并发跑：串行 7 批 × 十几秒就是两分钟的干等。3 路是折中——
@@ -1287,11 +1397,17 @@ impl Session<'_> {
                 }
             }
 
+            // 增量：这一轮只看了变过的文件，和上次的结论合起来才是完整的
+            let judgements = match (&prev, incremental) {
+                (Some(prev), true) => crate::scan_ai::merge(&prev.judgements, judgements, &changed),
+                _ => judgements,
+            };
+
             let _ = tx.send(Msg::ScanProgress(
                 req,
                 format!("模型判定结束，共消耗 {tokens} tokens"),
             ));
-            let _ = tx.send(Msg::ScanAiDone(req, judgements, failed));
+            let _ = tx.send(Msg::ScanAiDone(req, judgements, failed, snapshot));
         }));
         Ok(())
     }

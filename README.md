@@ -98,10 +98,14 @@ Early, but no longer a demo. Working today:
 - **`/scan [path]`** — 20 local rules drawn from the 410-item checklist: hardcoded secrets,
   `shell=True`, `eval`, SQL concatenation, ECB mode, `innerHTML`, `CORS *`, Dockerfile running as
   root, and so on. Every hit carries `file:line` and a CWE id. Read-only, no tokens spent.
-- **`/scan --ai`** — then hands the remaining 390 items to the model, 60 at a time, and demands a
-  verdict plus evidence for each one: `exists / suspected / not_found / undetermined`. Items that
-  can only be confirmed by running the service (rate limits, brute force, IDOR) are labelled
-  `undetermined` rather than quietly passed.
+- **`/scan --ai`** — then hands the remaining 390 items to the model and demands a verdict plus
+  evidence for each one: `exists / suspected / not_found / undetermined`. Items that can only be
+  confirmed by running the service (rate limits, brute force, IDOR) are labelled `undetermined`
+  rather than quietly passed.
+- **It only pays for what changed.** Nothing touched since the last scan → zero requests. One file
+  edited → the model only sees that file, in 3 requests instead of 7, and the verdicts for
+  untouched files carry over. New evidence always wins; an old finding is only dropped when its
+  own file changed.
 
 - **`/fix [n]`** — asks the model for a fixed version of each file, shows the diff, and writes
   nothing until you press `y`. In `plan` mode it still shows you the diff, it just never writes.

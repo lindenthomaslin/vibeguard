@@ -12,11 +12,16 @@ use crate::vuln_checklist::{VulnChecklist, VulnItem};
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use serde::Deserialize;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 
 /// 一次喂给模型多少条。太多会漏条目、输出被截断；太少则请求次数爆炸。
 /// 60 条大约 8 次请求，是个折中：再小就变成 20 次，一次真模型调用十几秒，太慢。
-const BATCH: usize = 60;
+pub const BATCH: usize = 60;
+
+/// 增量扫描时一批能装更多：摘要里只剩变过的几个文件，输入小了一个量级，
+/// 输出（每条一行判定）成了瓶颈。130 条大约 4k tokens，留了余量。
+pub const BATCH_INCREMENTAL: usize = 130;
 /// 仓库摘要里正文的总预算（字符），超了就只留文件树
 const DIGEST_BUDGET: usize = 40_000;
 /// 单个文件最多塞进去多少字符
@@ -60,6 +65,13 @@ impl Verdict {
     }
 }
 
+/// 一次判定所基于的仓库快照指纹，存档时要带上
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScanDigest {
+    pub hash: u64,
+    pub files: std::collections::BTreeMap<String, u64>,
+}
+
 /// 一条判定结果
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Judgement {
@@ -79,7 +91,9 @@ pub struct Batch {
 
 /// 按分类顺序把条目装进若干批，每批不超过 `BATCH` 条。
 /// 跨分类装批是为了少发请求——真模型一次要十几秒，按 19 个分类发就是五分钟。
-pub fn batches(checklist: &VulnChecklist, skip: &[&str]) -> Vec<Batch> {
+/// 指定批大小的版本：增量扫描时摘要小，可以一次判更多条
+pub fn batches_with(checklist: &VulnChecklist, skip: &[&str], size: usize) -> Vec<Batch> {
+    let size = size.max(1);
     let mut out: Vec<Batch> = Vec::new();
     let mut current: Vec<VulnItem> = Vec::new();
     let mut categories: Vec<String> = Vec::new();
@@ -106,7 +120,7 @@ pub fn batches(checklist: &VulnChecklist, skip: &[&str]) -> Vec<Batch> {
             .into_iter()
             .filter(|i| !skip.contains(&i.id.as_str()))
         {
-            if current.len() >= BATCH {
+            if current.len() >= size {
                 flush(&mut current, &mut categories, &mut out);
             }
             if categories.last().map(String::as_str) != Some(cat) {
@@ -197,7 +211,65 @@ const CODE_EXTS: &[&str] = &[
     "Dockerfile",
 ];
 
-pub fn digest(root: &Path) -> Digest {
+impl Digest {
+    /// 参与判定的每个文件的内容哈希
+    pub fn file_hashes(&self) -> std::collections::BTreeMap<String, u64> {
+        self.files
+            .iter()
+            .map(|(path, body)| (path.clone(), hash_of(body)))
+            .collect()
+    }
+
+    /// 整份摘要的指纹：文件树 + 每个文件内容。一样就说明「这一轮没什么可重判的」。
+    pub fn hash(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        self.tree.hash(&mut h);
+        for (path, body) in &self.files {
+            path.hash(&mut h);
+            body.hash(&mut h);
+        }
+        h.finish()
+    }
+}
+
+fn hash_of(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// 只把「变过的文件」正文放进摘要，文件树仍然给全——
+/// 像「鉴权中间件挂没挂」这类判断需要知道项目长什么样，
+/// 但不需要再看一遍没变过的代码。
+pub fn scoped_digest(root: &Path, changed: &[String]) -> Digest {
+    let paths = collect_paths(root);
+    let tree = tree_of(&paths);
+    let mut files = Vec::new();
+    let mut used = 0usize;
+    let mut omitted = 0usize;
+    for rel in changed {
+        if !paths.iter().any(|(p, _)| p == rel) {
+            continue; // 已经删掉的文件，没什么可给的
+        }
+        let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
+            omitted += 1;
+            continue;
+        };
+        if used + text.len() > DIGEST_BUDGET {
+            omitted += 1;
+            continue;
+        }
+        used += text.len();
+        files.push((rel.clone(), clip(&text, FILE_BUDGET)));
+    }
+    Digest {
+        tree,
+        files,
+        omitted,
+    }
+}
+
+fn collect_paths(root: &Path) -> Vec<(String, bool)> {
     let mut paths: Vec<(String, bool)> = Vec::new(); // (相对路径, 是否热点)
     let walker = WalkBuilder::new(root)
         .hidden(false)
@@ -251,13 +323,21 @@ pub fn digest(root: &Path) -> Digest {
 
     // 热点文件排前面，同等条件下路径短的优先（根目录的入口文件更重要）
     paths.sort_by_key(|(p, hot)| (!*hot, p.matches('/').count(), p.len()));
+    paths
+}
 
-    let tree = paths
+fn tree_of(paths: &[(String, bool)]) -> String {
+    paths
         .iter()
         .take(TREE_LINES)
         .map(|(p, _)| p.as_str())
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+}
+
+pub fn digest(root: &Path) -> Digest {
+    let paths = collect_paths(root);
+    let tree = tree_of(&paths);
 
     let mut files = Vec::new();
     let mut used = 0usize;
@@ -384,6 +464,42 @@ pub fn parse_fix(text: &str) -> Result<String> {
     anyhow::bail!("模型没有返回可以解析的文件内容")
 }
 
+/// 增量判定后的合并规则：
+///
+/// - 新的「存在 / 疑似」一律采纳——这一轮只看了变过的文件，能看到的都是新证据；
+/// - 旧判定只有在**它自己的证据文件变过**时才被替换，否则沿用上次结论
+///   （没变过的文件里，上次看到的问题还在）；
+/// - 上次没有的条目直接收下。
+///
+/// 这条规则的偏向很明确：宁可多报一条让人看一眼，也不因为「这一轮没扫到」就把
+/// 已知的问题抹掉。
+pub fn merge(prev: &[Judgement], fresh: Vec<Judgement>, changed: &[String]) -> Vec<Judgement> {
+    let mut out: Vec<Judgement> = Vec::with_capacity(prev.len().max(fresh.len()));
+    for old in prev {
+        let evidence_file = split_evidence(&old.evidence).0;
+        let old_file_changed = changed.iter().any(|c| c == &evidence_file);
+        match fresh.iter().find(|n| n.id == old.id) {
+            Some(new) => {
+                let take_new =
+                    matches!(new.verdict, Verdict::Exists | Verdict::Suspected) || old_file_changed;
+                out.push(if take_new { new.clone() } else { old.clone() });
+            }
+            // 这一轮没判到这条：证据文件没变就保留，变了就丢掉（它的依据已经不在了）
+            None => {
+                if !old_file_changed {
+                    out.push(old.clone());
+                }
+            }
+        }
+    }
+    for new in fresh {
+        if !prev.iter().any(|p| p.id == new.id) {
+            out.push(new);
+        }
+    }
+    out
+}
+
 #[derive(Deserialize)]
 struct Raw {
     results: Vec<RawItem>,
@@ -488,7 +604,7 @@ mod tests {
     #[test]
     fn batches_cover_every_item_exactly_once() {
         let list = VulnChecklist::new();
-        let bs = batches(&list, &[]);
+        let bs = batches_with(&list, &[], BATCH);
         let total: usize = bs.iter().map(|b| b.items.len()).sum();
         assert_eq!(total, list.len(), "有条目被漏掉或重复");
         assert!(bs.iter().all(|b| b.items.len() <= BATCH));
@@ -499,7 +615,7 @@ mod tests {
     fn batches_skip_what_the_local_rules_already_decided() {
         let list = VulnChecklist::new();
         let skip = crate::scan::covered_ids();
-        let bs = batches(&list, &skip);
+        let bs = batches_with(&list, &skip, BATCH);
         let total: usize = bs.iter().map(|b| b.items.len()).sum();
         assert_eq!(
             total,
@@ -511,6 +627,20 @@ mod tests {
                 assert!(!skip.contains(&item.id.as_str()), "{} 重复了", item.id);
             }
         }
+    }
+
+    #[test]
+    fn bigger_batches_need_fewer_requests() {
+        let list = VulnChecklist::new();
+        let skip = crate::scan::covered_ids();
+        let normal = batches_with(&list, &skip, BATCH).len();
+        let big = batches_with(&list, &skip, BATCH_INCREMENTAL).len();
+        assert!(big < normal, "{big} 应该比 {normal} 少");
+        let total: usize = batches_with(&list, &skip, BATCH_INCREMENTAL)
+            .iter()
+            .map(|b| b.items.len())
+            .sum();
+        assert_eq!(total, list.len() - skip.len(), "条数不能丢");
     }
 
     #[test]
@@ -532,7 +662,7 @@ mod tests {
     #[test]
     fn prompt_lists_every_item_and_asks_for_json() {
         let list = VulnChecklist::new();
-        let b = &batches(&list, &[])[0];
+        let b = &batches_with(&list, &[], BATCH)[0];
         let d = Digest {
             tree: "a.py".into(),
             files: vec![("a.py".into(), "print(1)".into())],
@@ -633,6 +763,62 @@ mod tests {
         );
         assert_eq!(parse_fix("```python\nprint(1)\n```").unwrap(), "print(1)");
         assert!(parse_fix("我不知道").is_err(), "解析不了就要报错，不能瞎猜");
+    }
+
+    fn judged(id: &str, verdict: Verdict, evidence: &str) -> Judgement {
+        Judgement {
+            id: id.into(),
+            verdict,
+            evidence: evidence.into(),
+            reason: String::new(),
+        }
+    }
+
+    #[test]
+    fn incremental_merge_keeps_old_findings_in_untouched_files() {
+        let prev = vec![
+            judged("AUTHZ-01", Verdict::Exists, "api/orders.py:42"),
+            judged("INJ-01", Verdict::NotFound, "api/orders.py:10"),
+        ];
+        // 这一轮只看 utils.py，两条都没在里头
+        let fresh = vec![
+            judged("AUTHZ-01", Verdict::NotFound, "utils.py"),
+            judged("INJ-01", Verdict::NotFound, "utils.py"),
+        ];
+        let merged = merge(&prev, fresh, &["utils.py".to_string()]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(
+            merged[0].verdict,
+            Verdict::Exists,
+            "没变过的文件里的问题要留着"
+        );
+        assert_eq!(merged[0].evidence, "api/orders.py:42");
+    }
+
+    #[test]
+    fn a_finding_whose_own_file_changed_is_replaced_even_if_it_disappears() {
+        let prev = vec![judged("AUTHZ-01", Verdict::Exists, "api/orders.py:42")];
+        let fresh = vec![judged("AUTHZ-01", Verdict::NotFound, "api/orders.py")];
+        let merged = merge(&prev, fresh, &["api/orders.py".to_string()]);
+        assert_eq!(merged[0].verdict, Verdict::NotFound, "修好了就该消失");
+    }
+
+    #[test]
+    fn new_evidence_always_wins() {
+        let prev = vec![judged("INJ-01", Verdict::NotFound, "app.py")];
+        let fresh = vec![judged("INJ-01", Verdict::Exists, "app.py:11")];
+        let merged = merge(&prev, fresh, &["app.py".to_string()]);
+        assert_eq!(merged[0].verdict, Verdict::Exists);
+        assert_eq!(merged[0].evidence, "app.py:11");
+    }
+
+    #[test]
+    fn merge_keeps_items_that_only_exist_on_one_side() {
+        let prev = vec![judged("A", Verdict::Exists, "a.py:1")];
+        let fresh = vec![judged("B", Verdict::Exists, "b.py:2")];
+        let merged = merge(&prev, fresh, &["b.py".to_string()]);
+        let ids: Vec<&str> = merged.iter().map(|j| j.id.as_str()).collect();
+        assert_eq!(ids, ["A", "B"], "两边独有的条目都要留下");
     }
 
     #[test]

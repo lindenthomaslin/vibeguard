@@ -59,6 +59,12 @@ pub struct StoredScan {
     /// 相对路径 → 指纹
     #[serde(default)]
     pub fingerprints: BTreeMap<String, Fingerprint>,
+    /// 这次判定所基于的仓库快照指纹（增量扫描靠它判断「有没有变」）
+    #[serde(default)]
+    pub digest_hash: u64,
+    /// 参与判定的每个文件的内容哈希
+    #[serde(default)]
+    pub digest_files: BTreeMap<String, u64>,
 }
 
 impl StoredScan {
@@ -254,6 +260,8 @@ mod tests {
             judgements: Vec::new(),
             failed_batches: Vec::new(),
             fingerprints,
+            digest_hash: 0,
+            digest_files: BTreeMap::new(),
         }
     }
 
