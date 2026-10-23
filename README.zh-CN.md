@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/lindenthomaslin/vibeguard/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/lindenthomaslin/vibeguard/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="rust" src="https://img.shields.io/badge/rust-2024-orange">
   <img alt="build" src="https://img.shields.io/badge/build-single%20binary-informational">
   <img alt="status" src="https://img.shields.io/badge/status-early-yellow">
