@@ -194,6 +194,10 @@ pub enum Action {
     SetPermission(crate::tools::PermissionMode),
     /// 工作模式（plan / confirm / auto）
     SetMode(crate::mode::Mode),
+    /// 浮层里上下移动：先按这个值渲染，别动配置文件
+    Preview(PickerPreview),
+    /// Esc 关掉浮层：把预览撤掉，回到落盘的那份
+    CancelPreview,
 }
 
 /// 逐条确认模式下的答复
@@ -254,6 +258,15 @@ struct Picker {
     subject: String,
 }
 
+/// 上下移动时立刻生效、但还没落盘的外观设置。
+/// 只在「看得见效果」的三个浮层里有：颜色、主题、字形。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerPreview {
+    Accent(crate::theme::Accent),
+    Theme(crate::theme::Theme),
+    Font(crate::theme::FontStyle),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PickerKind {
     Lang,
@@ -272,6 +285,22 @@ fn lang_desc(lang: Lang) -> &'static str {
     match lang {
         Lang::En => tr("默认语言"),
         Lang::Zh => tr("中文界面"),
+    }
+}
+
+/// 这个浮层里，光标停在第 n 项时应该预览成什么
+fn preview_of(kind: PickerKind, selected: usize) -> Action {
+    match kind {
+        PickerKind::Accent => {
+            Action::Preview(PickerPreview::Accent(crate::theme::Accent::ALL[selected]))
+        }
+        PickerKind::Theme => {
+            Action::Preview(PickerPreview::Theme(crate::theme::Theme::ALL[selected]))
+        }
+        PickerKind::Font => {
+            Action::Preview(PickerPreview::Font(crate::theme::FontStyle::ALL[selected]))
+        }
+        _ => Action::None,
     }
 }
 
@@ -760,12 +789,14 @@ impl AppState {
         };
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                move_to((selected + n - 1) % n);
-                Action::None
+                let next = (selected + n - 1) % n;
+                move_to(next);
+                preview_of(kind, next)
             }
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
-                move_to((selected + 1) % n);
-                Action::None
+                let next = (selected + 1) % n;
+                move_to(next);
+                preview_of(kind, next)
             }
             KeyCode::Enter => {
                 self.picker = None;
@@ -785,10 +816,13 @@ impl AppState {
             // 信任浮层按 Esc 当「不信任」：关掉窗口不能等于放行
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.picker = None;
-                if kind == PickerKind::Trust {
-                    Action::Trust(false)
-                } else {
-                    Action::None
+                match kind {
+                    PickerKind::Trust => Action::Trust(false),
+                    // 预览过就撤回：按 Esc 应该什么都不留下
+                    PickerKind::Accent | PickerKind::Theme | PickerKind::Font => {
+                        Action::CancelPreview
+                    }
+                    _ => Action::None,
                 }
             }
             _ => Action::None,
@@ -1828,5 +1862,60 @@ mod tests {
             app.on_key(key(KeyCode::Enter)),
             Action::SetMode(Mode::Confirm)
         );
+    }
+    #[test]
+    fn moving_in_the_accent_picker_previews_before_committing() {
+        use crate::theme::Accent;
+        let mut app = AppState::new();
+        app.open_accent_picker(Accent::Teal);
+        let preview = app.on_key(key(KeyCode::Down));
+        assert_eq!(
+            preview,
+            Action::Preview(PickerPreview::Accent(Accent::Sakura)),
+            "移过去应当先预览，而不是直接落盘"
+        );
+        // 预览之后回车才是确定
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::SetAccent(Accent::Sakura)
+        );
+    }
+
+    #[test]
+    fn esc_after_a_preview_asks_to_revert() {
+        use crate::theme::Accent;
+        let mut app = AppState::new();
+        app.open_accent_picker(Accent::Teal);
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(app.on_key(key(KeyCode::Esc)), Action::CancelPreview);
+        assert!(app.choice().is_none());
+    }
+
+    #[test]
+    fn the_theme_and_font_pickers_preview_too() {
+        use crate::theme::{FontStyle, Theme};
+        let mut app = AppState::new();
+        app.open_theme_picker(Theme::Dark);
+        assert_eq!(
+            app.on_key(key(KeyCode::Down)),
+            Action::Preview(PickerPreview::Theme(Theme::Light))
+        );
+        app.open_font_picker(FontStyle::Default);
+        assert_eq!(
+            app.on_key(key(KeyCode::Down)),
+            Action::Preview(PickerPreview::Font(FontStyle::Anime))
+        );
+    }
+
+    /// 没有视觉反馈的浮层不该发预览——否则按一下方向键就动了权限模式
+    #[test]
+    fn the_permission_and_mode_pickers_do_not_preview() {
+        use crate::mode::Mode;
+        use crate::tools::PermissionMode;
+        let mut app = AppState::new();
+        app.open_permission_picker(PermissionMode::ReadOnly);
+        assert_eq!(app.on_key(key(KeyCode::Down)), Action::None);
+        app.open_mode_picker(Mode::Plan);
+        assert_eq!(app.on_key(key(KeyCode::Down)), Action::None);
     }
 }

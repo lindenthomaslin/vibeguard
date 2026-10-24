@@ -1342,4 +1342,30 @@ mod tests {
             "被过滤掉了"
         );
     }
+    /// 预览能看见，靠的是这个：浮层边框和标题跟着强调色走。
+    /// 这条链断在别处（Look 没换、或者浮层用了别的颜色），预览就等于没做。
+    #[test]
+    fn the_choice_box_is_painted_in_the_accent_colour() {
+        use crate::theme::Accent;
+        let mut fx = Fixture::new();
+        // 输入框在浮层打开时是暗的，把它的强调色排除掉，只看浮层自己
+        fx.input_active = false;
+        fx.look = Look::with_accent(Theme::Dark, FontStyle::Default, Some(Accent::Ocean));
+        fx.choice = Some(Choice {
+            title: "Accent".into(),
+            items: vec![
+                ("teal".into(), "the default teal".into()),
+                ("ocean".into(), "ocean blue".into()),
+            ],
+            selected: 1,
+        });
+        let term = fx.render(80, 30);
+        let buf = term.backend().buffer();
+        let want = Accent::Ocean.color(Theme::Dark);
+        let painted = buf.content().iter().filter(|c| c.fg == want).count();
+        assert!(
+            painted > 20,
+            "浮层边框应当整圈都是强调色，实际只有 {painted} 个格子"
+        );
+    }
 }

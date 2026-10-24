@@ -418,6 +418,8 @@ impl Session<'_> {
                 Action::SetTheme(theme) => self.set_theme(theme),
                 Action::SetFont(font) => self.set_font(font),
                 Action::SetMode(mode) => self.state.set_mode(mode),
+                Action::Preview(p) => self.preview(p),
+                Action::CancelPreview => self.cancel_preview(),
                 Action::SetPermission(mode) => {
                     if let Err(e) = self.set_permission_mode(mode.code()) {
                         self.state.push(Entry::Error(format!("{e:#}")));
@@ -2126,6 +2128,24 @@ impl Session<'_> {
         }
     }
 
+    /// 浮层里上下移动：只改内存里的覆盖值，配置文件不动。
+    /// 这样「移过去看一眼」和「按回车定下来」是两件事。
+    fn preview(&mut self, p: crate::tui::state::PickerPreview) {
+        use crate::tui::state::PickerPreview;
+        match p {
+            PickerPreview::Accent(a) => self.app.overrides.accent = Some(a.label().to_string()),
+            PickerPreview::Theme(t) => self.app.overrides.theme = Some(t.label().to_string()),
+            PickerPreview::Font(f) => self.app.overrides.font_style = Some(f.label().to_string()),
+        }
+    }
+
+    /// 撤回预览：把三个外观覆盖值都清掉，界面回到配置文件里那份
+    fn cancel_preview(&mut self) {
+        self.app.overrides.accent = None;
+        self.app.overrides.theme = None;
+        self.app.overrides.font_style = None;
+    }
+
     /// 换强调色。存进配置，下次启动照样生效
     fn set_accent(&mut self, accent: crate::theme::Accent) {
         self.app.file.accent = accent.label().to_string();
@@ -2136,6 +2156,8 @@ impl Session<'_> {
             )));
             return;
         }
+        // 落盘之后覆盖值就没用了，留着反而会盖住以后对配置文件的修改
+        self.app.overrides.accent = None;
         self.state.push(Entry::Success(pick(
             format!("强调色：{}", accent.label()),
             format!("Accent: {}", accent.label()),
@@ -2198,7 +2220,7 @@ impl Session<'_> {
     fn set_theme(&mut self, theme: Theme) {
         // 立刻生效靠 override，长期生效靠配置文件——两个都写，
         // 否则「在菜单里选了 dark，重开又变回去」会显得像个 bug
-        self.app.overrides.theme = Some(theme.label().to_string());
+        self.app.overrides.theme = None;
         let _ = self.app.file.set("theme", theme.label());
         let _ = self.app.save();
         self.state.push(Entry::Success(pick(
@@ -2209,7 +2231,7 @@ impl Session<'_> {
 
     /// 换字形（框线形状 + 标记符号）
     fn set_font(&mut self, font: FontStyle) {
-        self.app.overrides.font_style = Some(font.label().to_string());
+        self.app.overrides.font_style = None;
         let _ = self.app.file.set("font_style", font.label());
         let _ = self.app.save();
         let hint = match font {

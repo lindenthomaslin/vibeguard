@@ -131,6 +131,7 @@ async fn run(cli: Cli) -> Result<()> {
         thinking: cli.thinking,
         theme: None,
         font_style: None,
+        accent: None,
     };
     let mut app = App::load(path, overrides)?;
     // 界面语言：配置里默认 en，这里立刻生效，后面所有文案都跟着它
