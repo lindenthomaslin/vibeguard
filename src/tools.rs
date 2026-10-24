@@ -7,20 +7,43 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionMode {
+    /// 默认只读：装好就能扫，但什么都改不了
+    #[default]
     ReadOnly,
     Editable,
     Full,
 }
 
 impl PermissionMode {
+    pub const ALL: [Self; 3] = [Self::ReadOnly, Self::Editable, Self::Full];
+
     pub fn label(&self) -> &'static str {
         match self {
             Self::ReadOnly => tr("只读"),
             Self::Editable => tr("可编辑"),
             Self::Full => tr("全权限"),
+        }
+    }
+
+    /// 写进配置文件的写法，和界面显示的语言无关
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "readonly",
+            Self::Editable => "editable",
+            Self::Full => "full",
+        }
+    }
+
+    /// 菜单里那一行说明。三个模式的区别就在「能不能改文件、能不能跑命令」，
+    /// 所以每条都把这三点说全，别让人靠名字猜。
+    pub fn desc(self) -> &'static str {
+        match self {
+            Self::ReadOnly => tr("只读，不能修改文件或执行命令"),
+            Self::Editable => tr("可编辑，能修改文件，不能执行命令"),
+            Self::Full => tr("全权限，能修改文件和执行命令（删除除外）"),
         }
     }
 }

@@ -378,7 +378,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("修复 {}/{}：{} · {}:{}", "Fixing {}/{}: {} · {}:{}"),
     ("修改", "Edit"),
     ("修改并保存配置项", "Edit and save a config key"),
-    ("全权限", "Full"),
+    ("全权限", "full"),
     ("全自动", "Auto"),
     (
         "共 {} 个 · 输入过滤 · Enter 打开 · Del 删除 · Esc 关闭",
@@ -1187,4 +1187,20 @@ pub static TABLE: &[(&str, &str)] = &[
     ("琥珀", "amber"),
     ("青柠", "lime"),
     ("无彩", "monochrome"),
+    (
+        "只读，不能修改文件或执行命令",
+        "read-only: no edits, no commands",
+    ),
+    (
+        "可编辑，能修改文件，不能执行命令",
+        "editable: edits allowed, commands blocked",
+    ),
+    (
+        "全权限，能修改文件和执行命令（删除除外）",
+        "full: edits and commands, except deletes",
+    ),
+    ("界面主题", "Theme"),
+    ("字形", "Glyphs"),
+    ("权限模式", "Permission mode"),
+    ("工作模式", "Work mode"),
 ];

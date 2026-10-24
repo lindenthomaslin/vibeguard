@@ -188,6 +188,12 @@ pub enum Action {
     Trust(bool),
     /// 强调色选择
     SetAccent(crate::theme::Accent),
+    /// 主题 / 字形 / 权限模式的选择
+    SetTheme(crate::theme::Theme),
+    SetFont(crate::theme::FontStyle),
+    SetPermission(crate::tools::PermissionMode),
+    /// 工作模式（plan / confirm / auto）
+    SetMode(crate::mode::Mode),
 }
 
 /// 逐条确认模式下的答复
@@ -253,6 +259,10 @@ enum PickerKind {
     Lang,
     Trust,
     Accent,
+    Theme,
+    Font,
+    Permission,
+    Mode,
 }
 
 /// 可选的语言，顺序即菜单顺序
@@ -262,6 +272,20 @@ fn lang_desc(lang: Lang) -> &'static str {
     match lang {
         Lang::En => tr("默认语言"),
         Lang::Zh => tr("中文界面"),
+    }
+}
+
+fn theme_desc(theme: crate::theme::Theme) -> &'static str {
+    match theme {
+        crate::theme::Theme::Dark => tr("深色底，亮色字"),
+        crate::theme::Theme::Light => tr("浅色底，深色字"),
+    }
+}
+
+fn font_desc(font: crate::theme::FontStyle) -> &'static str {
+    match font {
+        crate::theme::FontStyle::Default => tr("朴素框线，圆点标记"),
+        crate::theme::FontStyle::Anime => tr("圆角框 + 星星爱心"),
     }
 }
 
@@ -443,6 +467,34 @@ impl AppState {
                     crate::theme::Accent::ALL
                         .iter()
                         .map(|&a| (a.label().to_string(), accent_desc(a).to_string()))
+                        .collect(),
+                ),
+                PickerKind::Theme => (
+                    tr("界面主题").to_string(),
+                    crate::theme::Theme::ALL
+                        .iter()
+                        .map(|&t| (t.label().to_string(), theme_desc(t).to_string()))
+                        .collect(),
+                ),
+                PickerKind::Font => (
+                    tr("字形").to_string(),
+                    crate::theme::FontStyle::ALL
+                        .iter()
+                        .map(|&f| (f.label().to_string(), font_desc(f).to_string()))
+                        .collect(),
+                ),
+                PickerKind::Permission => (
+                    tr("权限模式").to_string(),
+                    crate::tools::PermissionMode::ALL
+                        .iter()
+                        .map(|&m| (m.label().to_string(), m.desc().to_string()))
+                        .collect(),
+                ),
+                PickerKind::Mode => (
+                    tr("工作模式").to_string(),
+                    crate::mode::Mode::ALL
+                        .iter()
+                        .map(|&m| (m.label().to_string(), m.describe().to_string()))
                         .collect(),
                 ),
             };
@@ -696,6 +748,10 @@ impl AppState {
             PickerKind::Lang => LANGS.len(),
             PickerKind::Trust => 2,
             PickerKind::Accent => crate::theme::Accent::ALL.len(),
+            PickerKind::Theme => crate::theme::Theme::ALL.len(),
+            PickerKind::Font => crate::theme::FontStyle::ALL.len(),
+            PickerKind::Permission => crate::tools::PermissionMode::ALL.len(),
+            PickerKind::Mode => crate::mode::Mode::ALL.len(),
         };
         let mut move_to = |sel: usize| {
             if let Some(p) = self.picker.as_mut() {
@@ -718,6 +774,12 @@ impl AppState {
                     // 第一项是「信任」，第二项是「只读」
                     PickerKind::Trust => Action::Trust(selected == 0),
                     PickerKind::Accent => Action::SetAccent(crate::theme::Accent::ALL[selected]),
+                    PickerKind::Theme => Action::SetTheme(crate::theme::Theme::ALL[selected]),
+                    PickerKind::Font => Action::SetFont(crate::theme::FontStyle::ALL[selected]),
+                    PickerKind::Permission => {
+                        Action::SetPermission(crate::tools::PermissionMode::ALL[selected])
+                    }
+                    PickerKind::Mode => Action::SetMode(crate::mode::Mode::ALL[selected]),
                 }
             }
             // 信任浮层按 Esc 当「不信任」：关掉窗口不能等于放行
@@ -851,6 +913,58 @@ impl AppState {
             kind: PickerKind::Trust,
             selected: 1,
             subject,
+        });
+    }
+
+    /// 打开工作模式选择，光标停在当前模式上
+    pub fn open_mode_picker(&mut self, current: crate::mode::Mode) {
+        let selected = crate::mode::Mode::ALL
+            .iter()
+            .position(|&m| m == current)
+            .unwrap_or(0);
+        self.picker = Some(Picker {
+            kind: PickerKind::Mode,
+            selected,
+            subject: String::new(),
+        });
+    }
+
+    /// 打开主题选择，光标停在当前主题上
+    pub fn open_theme_picker(&mut self, current: crate::theme::Theme) {
+        let selected = crate::theme::Theme::ALL
+            .iter()
+            .position(|&t| t == current)
+            .unwrap_or(0);
+        self.picker = Some(Picker {
+            kind: PickerKind::Theme,
+            selected,
+            subject: String::new(),
+        });
+    }
+
+    /// 打开字形选择
+    pub fn open_font_picker(&mut self, current: crate::theme::FontStyle) {
+        let selected = crate::theme::FontStyle::ALL
+            .iter()
+            .position(|&f| f == current)
+            .unwrap_or(0);
+        self.picker = Some(Picker {
+            kind: PickerKind::Font,
+            selected,
+            subject: String::new(),
+        });
+    }
+
+    /// 打开权限模式选择，光标停在当前模式上
+    pub fn open_permission_picker(&mut self, current: crate::tools::PermissionMode) {
+        let selected = crate::tools::PermissionMode::ALL
+            .iter()
+            .position(|&m| m == current)
+            .unwrap_or(0);
+        self.picker = Some(Picker {
+            kind: PickerKind::Permission,
+            selected,
+            subject: String::new(),
         });
     }
 
@@ -1641,6 +1755,78 @@ mod tests {
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
             Action::SetAccent(Accent::Ocean)
+        );
+    }
+    #[test]
+    fn the_theme_picker_returns_the_highlighted_theme() {
+        use crate::theme::Theme;
+        let mut app = AppState::new();
+        app.open_theme_picker(Theme::Dark);
+        let choice = app.choice().expect("主题浮层应当出现");
+        assert_eq!(choice.items.len(), Theme::ALL.len());
+        assert_eq!(choice.selected, 0);
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::SetTheme(Theme::Dark)
+        );
+        // 下移一格再回车，应当给出另一套主题
+        app.open_theme_picker(Theme::Dark);
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::SetTheme(Theme::Light)
+        );
+    }
+
+    #[test]
+    fn the_permission_picker_lists_all_three_modes() {
+        use crate::tools::PermissionMode;
+        let mut app = AppState::new();
+        app.open_permission_picker(PermissionMode::Full);
+        let choice = app.choice().expect("权限浮层应当出现");
+        assert_eq!(choice.items.len(), PermissionMode::ALL.len());
+        // 光标落在当前模式上，不是永远第一项
+        assert_eq!(choice.selected, 2);
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::SetPermission(PermissionMode::Full)
+        );
+        app.open_permission_picker(PermissionMode::ReadOnly);
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::SetPermission(PermissionMode::Editable)
+        );
+    }
+
+    #[test]
+    fn the_font_picker_returns_the_highlighted_font() {
+        use crate::theme::FontStyle;
+        let mut app = AppState::new();
+        app.open_font_picker(FontStyle::Anime);
+        assert_eq!(app.choice().unwrap().selected, 1);
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::SetFont(FontStyle::Anime)
+        );
+    }
+    #[test]
+    fn the_mode_picker_returns_the_highlighted_mode() {
+        use crate::mode::Mode;
+        let mut app = AppState::new();
+        app.open_mode_picker(Mode::Confirm);
+        let choice = app.choice().expect("模式浮层应当出现");
+        assert_eq!(choice.items.len(), Mode::ALL.len());
+        assert_eq!(choice.selected, 1);
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::SetMode(Mode::Confirm)
+        );
+        app.open_mode_picker(Mode::Plan);
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::SetMode(Mode::Confirm)
         );
     }
 }

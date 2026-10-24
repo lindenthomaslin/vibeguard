@@ -415,6 +415,14 @@ impl Session<'_> {
                 Action::SetLang(lang) => self.apply_lang(lang),
                 Action::Trust(yes) => self.answer_trust(yes),
                 Action::SetAccent(accent) => self.set_accent(accent),
+                Action::SetTheme(theme) => self.set_theme(theme),
+                Action::SetFont(font) => self.set_font(font),
+                Action::SetMode(mode) => self.state.set_mode(mode),
+                Action::SetPermission(mode) => {
+                    if let Err(e) = self.set_permission_mode(mode.code()) {
+                        self.state.push(Entry::Error(format!("{e:#}")));
+                    }
+                }
             },
             Msg::Term(Event::Paste(text)) => self.state.on_paste(&text),
             // 窗口尺寸变了，启动画面可能换档或者被收起，顺带整屏重绘一次
@@ -1908,7 +1916,10 @@ impl Session<'_> {
                 _ => bail!("{}", tr("用法：/thinking [auto|off|low|high|max]")),
             },
             "mode" => match args.as_slice() {
-                [] => self.state.push(Entry::Block(self.mode_lines())),
+                [] => {
+                    let current = self.state.mode;
+                    self.state.open_mode_picker(current);
+                }
                 [name] => match Mode::parse(name) {
                     Some(mode) => self.state.set_mode(mode),
                     None => bail!("{}", tr("模式可选值为 plan / confirm / auto")),
@@ -1919,7 +1930,10 @@ impl Session<'_> {
             "accent" => self.set_accent_cmd(&args)?,
             "trust" => self.trust_now()?,
             "theme" => match args.as_slice() {
-                [] => self.state.push(Entry::Block(self.appearance_lines())),
+                [] => {
+                    let current = Theme::parse(&self.app.effective().theme).unwrap_or_default();
+                    self.state.open_theme_picker(current);
+                }
                 [name] => match Theme::parse(name) {
                     Some(theme) => self.set_theme(theme),
                     None => bail!("{}", tr("主题可选值为 dark / light")),
@@ -1927,7 +1941,11 @@ impl Session<'_> {
                 _ => bail!("{}", tr("用法：/theme [dark|light]")),
             },
             "font" => match args.as_slice() {
-                [] => self.state.push(Entry::Block(self.appearance_lines())),
+                [] => {
+                    let current =
+                        FontStyle::parse(&self.app.effective().font_style).unwrap_or_default();
+                    self.state.open_font_picker(current);
+                }
                 [name] => match FontStyle::parse(name) {
                     Some(font) => self.set_font(font),
                     None => bail!("{}", tr("字形可选值为 default / anime")),
@@ -1935,7 +1953,10 @@ impl Session<'_> {
                 _ => bail!("{}", tr("用法：/font [default|anime]")),
             },
             "permissions" => match args.as_slice() {
-                [] => self.show_permissions(),
+                [] => {
+                    let current = self.app.effective().permission_mode;
+                    self.state.open_permission_picker(current);
+                }
                 [mode] => {
                     self.set_permission_mode(mode)?;
                 }
@@ -2037,102 +2058,6 @@ impl Session<'_> {
         ]));
         out
     }
-
-    fn show_permissions(&mut self) {
-        let cfg = self.app.effective();
-        let lines = vec![
-            Line::from(vec![Span::styled(
-                tr("权限设置"),
-                Style::new().add_modifier(Modifier::BOLD),
-            )]),
-            Line::raw(""),
-            Line::from(vec![
-                Span::styled(
-                    tr("  权限模式           "),
-                    Style::new().add_modifier(Modifier::DIM),
-                ),
-                Span::raw(cfg.permission_mode.label()),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    tr("  工作目录           "),
-                    Style::new().add_modifier(Modifier::DIM),
-                ),
-                Span::raw(cfg.workspace_root.as_ref().map_or_else(
-                    || tr("默认（启动时的当前目录）").to_string(),
-                    |p| p.display().to_string(),
-                )),
-            ]),
-            Line::raw(""),
-            Line::styled(tr("用法："), Style::new().add_modifier(Modifier::DIM)),
-            Line::raw(tr(
-                "  /permissions readonly           只读，不能修改文件或执行命令",
-            )),
-            Line::raw(tr(
-                "  /permissions editable           可编辑，能修改文件，不能执行命令",
-            )),
-            Line::raw(tr(
-                "  /permissions full               全权限，能修改文件和执行命令（删除除外）",
-            )),
-            Line::raw(tr(
-                "  /permissions <模式> <目录>      同时设置权限模式和工作目录",
-            )),
-        ];
-        self.state.push(Entry::Block(lines));
-    }
-
-    /// `/theme` 和 `/font` 不带参数时共用这张表：两个维度一起看才选得明白
-    fn appearance_lines(&self) -> Vec<Line<'static>> {
-        let cfg = self.app.effective();
-        let look = Look::from_config(&cfg);
-        let theme = Theme::parse(&cfg.theme).unwrap_or_default();
-        let font = FontStyle::parse(&cfg.font_style).unwrap_or_default();
-        let dim = Style::new().add_modifier(Modifier::DIM);
-
-        let mut out = vec![Line::from(vec![
-            Span::styled(tr("外观 "), Style::new().add_modifier(Modifier::BOLD)),
-            Span::raw(pick(
-                format!("主题 {} · 字形 {}", theme.label(), font.label()),
-                format!("Theme {} · font {}", theme.label(), font.label()),
-            )),
-        ])];
-        let themes = Theme::ALL.map(|t| {
-            let desc = match t {
-                Theme::Dark => tr("深色底，亮色字"),
-                Theme::Light => tr("浅色底，深色字"),
-            };
-            (t == theme, t.label(), desc)
-        });
-        let fonts = FontStyle::ALL.map(|f| {
-            let desc = match f {
-                FontStyle::Default => tr("朴素框线，圆点标记"),
-                FontStyle::Anime => tr("圆角框 + 星星爱心，主色樱花粉"),
-            };
-            (f == font, f.label(), desc)
-        });
-        for (on, name, desc) in themes.into_iter().chain(fonts) {
-            let (mark, style) = if on {
-                (
-                    "›",
-                    Style::new()
-                        .fg(look.palette.accent)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                (" ", dim)
-            };
-            out.push(Line::from(vec![
-                Span::styled(format!("  {mark} {name:<8}"), style),
-                Span::styled(desc, if on { Style::new() } else { dim }),
-            ]));
-        }
-        out.push(Line::styled(
-            tr("  Ctrl-T 换主题 · /theme light · /font anime · /config set theme light 长期生效"),
-            dim,
-        ));
-        out
-    }
-
     /// `/lang`：不带参数打开选择菜单，带参数直接切
     fn set_lang(&mut self, args: &[&str]) -> Result<()> {
         let Some(raw) = args.first() else {
@@ -2271,7 +2196,11 @@ impl Session<'_> {
     }
 
     fn set_theme(&mut self, theme: Theme) {
+        // 立刻生效靠 override，长期生效靠配置文件——两个都写，
+        // 否则「在菜单里选了 dark，重开又变回去」会显得像个 bug
         self.app.overrides.theme = Some(theme.label().to_string());
+        let _ = self.app.file.set("theme", theme.label());
+        let _ = self.app.save();
         self.state.push(Entry::Success(pick(
             format!("界面主题：{}", theme.label()),
             format!("Theme: {}", theme.label()),
@@ -2281,6 +2210,8 @@ impl Session<'_> {
     /// 换字形（框线形状 + 标记符号）
     fn set_font(&mut self, font: FontStyle) {
         self.app.overrides.font_style = Some(font.label().to_string());
+        let _ = self.app.file.set("font_style", font.label());
+        let _ = self.app.save();
         let hint = match font {
             FontStyle::Default => tr("朴素框线，圆点标记"),
             FontStyle::Anime => tr("圆角框 + 星星爱心"),
@@ -2290,43 +2221,6 @@ impl Session<'_> {
             format!("Font: {} ({hint})", font.label()),
         )));
     }
-
-    /// `/mode` 不带参数时列出三档，标出当前这一档
-    fn mode_lines(&self) -> Vec<Line<'static>> {
-        let dim = Style::new().add_modifier(Modifier::DIM);
-        let mut out = vec![Line::from(vec![
-            Span::styled(tr("工作模式 "), Style::new().add_modifier(Modifier::BOLD)),
-            Span::raw(pick(
-                format!("当前「{}」", self.state.mode.title()),
-                format!("Currently \"{}\"", self.state.mode.title()),
-            )),
-        ])];
-        let look = Look::from_config(&self.app.effective());
-        for mode in Mode::ALL {
-            let current = mode == self.state.mode;
-            let (mark, style) = if current {
-                (
-                    "›",
-                    Style::new()
-                        .fg(look.chip(mode))
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                (" ", dim)
-            };
-            out.push(Line::from(vec![
-                // 8 列 = 最长的 "confirm" 再加一格，三行说明才会对齐
-                Span::styled(format!("  {mark} {:<8}", mode.label()), style),
-                Span::styled(mode.describe(), if current { Style::new() } else { dim }),
-            ]));
-        }
-        out.push(Line::styled(
-            tr("  Shift-Tab / Ctrl-P 循环切换，也可以 /mode plan"),
-            dim,
-        ));
-        out
-    }
-
     fn set_permission_mode(&mut self, mode: &str) -> Result<()> {
         self.app.file.set("permission_mode", mode)?;
         self.app.save()?;

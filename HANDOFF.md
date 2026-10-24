@@ -223,6 +223,11 @@ with a reply channel, then `.await`s it. Nothing is written before the answer ar
 | `PgUp` / `PgDn`, `Ctrl-B` / `Ctrl-G` | Scroll transcript / jump to ends |
 | `Ctrl-D` | Quit |
 
+Every settings command opens the same overlay when given no argument — `/theme`, `/font`,
+`/accent`, `/mode`, `/permissions`, `/lang`. `↑`/`↓` move, `Enter` applies, `Esc` cancels, and the
+cursor starts on the current value. The argument forms (`/theme light`, `/permissions full`) still
+work, which is what scripts and muscle memory use.
+
 In the history panel (`/sessions`, `/search`):
 
 | Key | Action |

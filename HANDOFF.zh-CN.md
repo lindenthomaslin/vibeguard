@@ -195,6 +195,10 @@ confirm 那个握手是这段代码里最值得看的地方：`start_chat` 发�
 | `PgUp` / `PgDn`、`Ctrl-B` / `Ctrl-G` | 滚动对话区 / 跳到首尾 |
 | `Ctrl-D` | 退出 |
 
+所有设置类命令不带参数时都会弹同一个浮层——`/theme`、`/font`、`/accent`、`/mode`、
+`/permissions`、`/lang`。`↑`/`↓` 移动、`Enter` 生效、`Esc` 取消，光标落在当前值上。
+带参数的写法（`/theme light`、`/permissions full`）照旧可用，脚本和肌肉记忆都靠它。
+
 历史对话面板（`/sessions`、`/search`）里：
 
 | 按键 | 作用 |
