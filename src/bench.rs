@@ -127,6 +127,8 @@ pub struct Row {
     pub line: u32,
     pub kind: Kind,
     pub label: String,
+    /// 对应的清单编号。检索标定要用它找到「这条会被塞进哪一批」
+    pub id: Option<String>,
 }
 
 /// 读标注表，把 marker 注释换成真实行号。
@@ -154,6 +156,11 @@ pub fn load(dir: &Path) -> Result<Vec<Row>> {
             other => bail!("第 {} 行：kind 只能是 bug / trap，收到 `{other}`", n + 1),
         };
         let label = it.next().unwrap_or_default().trim().to_string();
+        let id = it
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != "-")
+            .map(str::to_string);
         let line =
             locate(&fixtures.join(&file), &marker).with_context(|| format!("第 {} 行", n + 1))?;
         rows.push(Row {
@@ -161,6 +168,7 @@ pub fn load(dir: &Path) -> Result<Vec<Row>> {
             line,
             kind,
             label,
+            id,
         });
     }
     if rows.is_empty() {
@@ -481,6 +489,209 @@ pub fn report(run: &Run) {
     }
 }
 
+// ---------- 第三段：检索 ----------
+//
+// 前两段量的都是「模型看到代码之后判得准不准」。真实仓库上还有一道更早的闸：
+// 模型根本看不到全部代码，只能看到检索挑出来的那几十个文件。挑错了，后面再准也没用。
+//
+// 这一段是纯函数：不调模型、不花钱、能在 CI 里跑。
+
+pub struct Retrieval {
+    pub hit: usize,
+    pub total: usize,
+    /// 没被检索到的标注（文件:行 + 说明）
+    pub misses: Vec<String>,
+    /// 平均每批塞进上下文的文件数，用来看预算有没有被浪费
+    pub files_per_batch: f32,
+}
+
+impl Retrieval {
+    pub fn recall(&self) -> f32 {
+        if self.total == 0 {
+            0.0
+        } else {
+            self.hit as f32 / self.total as f32
+        }
+    }
+}
+
+fn same_name(a: &str, b: &str) -> bool {
+    std::path::Path::new(a)
+        .file_name()
+        .map(|n| n.to_string_lossy() == b)
+        .unwrap_or(false)
+}
+
+/// 每条标注的文件，有没有被它所在的那一批检索出来
+pub fn retrieval_recall(root: &Path, rows: &[Row], budget: usize) -> Retrieval {
+    use std::collections::HashMap;
+
+    let checklist = crate::vuln_checklist::VulnChecklist::new();
+    let index = crate::scan_ai::Index::build(root);
+    let batches = crate::scan_ai::batches_with(
+        &checklist,
+        &crate::scan::covered_ids(),
+        crate::scan_ai::BATCH,
+        crate::scan_ai::SECURITY_CATEGORIES,
+    );
+
+    // 每批检索一次就够：同一批里十几条标注共用同一份上下文
+    let mut cache: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut hit = 0;
+    let mut total = 0;
+    let mut misses = Vec::new();
+
+    for row in rows.iter().filter(|r| r.kind == Kind::Bug) {
+        let Some(id) = &row.id else { continue };
+        let Some(bi) = batches
+            .iter()
+            .position(|b| b.items.iter().any(|i| &i.id == id))
+        else {
+            continue;
+        };
+        let files = cache.entry(bi).or_insert_with(|| {
+            index
+                .retrieve(&batches[bi], budget)
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect()
+        });
+        total += 1;
+        if files.iter().any(|f| same_name(f, &row.file)) {
+            hit += 1;
+        } else {
+            misses.push(format!("{}:{} {}", row.file, row.line, row.label));
+        }
+    }
+
+    let files_per_batch = if cache.is_empty() {
+        0.0
+    } else {
+        cache.values().map(Vec::len).sum::<usize>() as f32 / cache.len() as f32
+    };
+
+    Retrieval {
+        hit,
+        total,
+        misses,
+        files_per_batch,
+    }
+}
+
+/// 往目录里铺一批干扰文件：名字和内容都沾安全词汇，
+/// 逼检索真的分辨，而不是靠「全仓库只有它提到 auth」蒙对。
+pub fn fill_with_distractors(dir: &Path, n: usize) -> Result<()> {
+    const NOUNS: &[&str] = &[
+        "user", "session", "invoice", "project", "order", "coupon", "token", "upload", "report",
+        "webhook", "audit", "billing", "tenant", "apikey", "job", "mail", "search", "cache",
+    ];
+    const VERBS: &[&str] = &[
+        "load", "save", "fetch", "verify", "render", "dispatch", "sync", "flush", "attach",
+        "resolve",
+    ];
+    for i in 0..n {
+        let noun = NOUNS[i % NOUNS.len()];
+        let verb = VERBS[(i / NOUNS.len()) % VERBS.len()];
+        let module = format!("{noun}_{verb}_{i:03}");
+        let body = format!(
+            "\"\"\"{noun} {verb} helpers.\"\"\"\n\
+             \n\
+             from models import {noun_title}\n\
+             from client import api\n\
+             \n\
+             \n\
+             def {verb}_{noun}(request, **kwargs):\n\
+             \x20   \"\"\"Handle {noun} {verb}; called from the API layer.\"\"\"\n\
+             \x20   item = {noun_title}.query.get(request.args.get(\"id\"))\n\
+             \x20   if item is None:\n\
+             \x20       return None\n\
+             \x20   data = item.as_dict()\n\
+             \x20   for key, value in kwargs.items():\n\
+             \x20       data[key] = value\n\
+             \x20   api.session.commit()\n\
+             \x20   return data\n\
+             \n\
+             \n\
+             def {verb}_all_{noun}():\n\
+             \x20   return [{noun_title}.query.all()]\n",
+            noun_title = format!("{}{}", noun[..1].to_uppercase(), &noun[1..]),
+        );
+        std::fs::write(dir.join(format!("{module}.py")), body)
+            .with_context(|| format!("写不进干扰文件 {module}.py"))?;
+    }
+    Ok(())
+}
+
+/// 跑一遍检索标定并打印。不花 token，所以也给命令行开了一个入口，
+/// 免得「检索准不准」只能靠 `cargo test -- --nocapture` 看
+pub fn report_retrieval(dir: &Path, distractors: usize) -> Result<()> {
+    let dir = if dir.is_dir() {
+        dir.to_path_buf()
+    } else {
+        root().join(dir)
+    };
+    let rows = load(&dir)?;
+    let staged = std::env::temp_dir().join(format!("vibeguard-bench-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staged);
+    staged_repo(&staged, distractors)?;
+    let r = retrieval_recall(&staged, &rows, crate::scan_ai::RETRIEVE_BUDGET);
+    let _ = std::fs::remove_dir_all(&staged);
+
+    println!(
+        "{}",
+        pick(
+            format!(
+                "检索标定：{} 个文件（含 {} 个干扰），每批塞进上下文 {:.0} 个",
+                distractors + 6,
+                distractors,
+                r.files_per_batch
+            ),
+            format!(
+                "Retrieval: {} files ({} distractors), {:.0} per batch",
+                distractors + 6,
+                distractors,
+                r.files_per_batch
+            ),
+        )
+    );
+    println!(
+        "{}",
+        pick(
+            format!("召回 {}/{} = {:.0}%", r.hit, r.total, r.recall() * 100.0),
+            format!("recall {}/{} = {:.0}%", r.hit, r.total, r.recall() * 100.0),
+        )
+    );
+    if !r.misses.is_empty() {
+        println!(
+            "{}",
+            pick("漏掉的标注：".to_string(), "Missed:".to_string())
+        );
+        for m in &r.misses {
+            println!("  - {m}");
+        }
+    }
+    Ok(())
+}
+
+/// 把样例仓库复制到 `dir`，再铺一批干扰文件。
+/// 标定要在「真实尺寸」的仓库上跑，但仓库本身不该进版本库——
+/// 干扰文件是生成的，样例是复制的，每次跑都从零开始。
+pub fn staged_repo(dir: &Path, distractors: usize) -> Result<()> {
+    let src = root().join("bench/ai/fixtures");
+    std::fs::create_dir_all(dir)?;
+    for entry in std::fs::read_dir(&src)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file()
+            && let Some(name) = path.file_name()
+        {
+            std::fs::copy(&path, dir.join(name))?;
+        }
+    }
+    fill_with_distractors(dir, distractors)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod ai_bench_tests {
     use super::*;
@@ -505,6 +716,7 @@ mod ai_bench_tests {
             line,
             kind,
             label: "x".into(),
+            id: None,
         }
     }
 
@@ -572,5 +784,47 @@ mod ai_bench_tests {
         let rows = [row("a.py", 10, Kind::Bug)];
         let s = score(&[finding("./a.py", 10)], &rows, 3);
         assert_eq!(s.tp, 1);
+    }
+    /// 检索是模型之前的那道闸：文件没被挑出来，后面判得再准也没用。
+    /// 小仓库里必然全中（六个文件全塞得下），所以真正要看的是加了干扰之后。
+    #[test]
+    fn retrieval_finds_the_vulnerable_files_in_a_real_sized_repo() {
+        let rows = load(&root().join("bench/ai")).expect("标注表");
+        let budget = crate::scan_ai::RETRIEVE_BUDGET;
+
+        let small = retrieval_recall(&root().join("bench/ai/fixtures"), &rows, budget);
+        assert_eq!(
+            small.hit, small.total,
+            "小仓库都不全中，说明标注和批次的对应写错了：{:?}",
+            small.misses
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        staged_repo(dir.path(), 300).unwrap();
+        let big = retrieval_recall(dir.path(), &rows, budget);
+        println!(
+            "检索召回 {}/{} = {:.0}% · 每批塞进上下文 {:.0} 个文件",
+            big.hit,
+            big.total,
+            big.recall() * 100.0,
+            big.files_per_batch
+        );
+        for m in &big.misses {
+            println!("  漏：{m}");
+        }
+        // 纯函数、无模型、无随机：这里就该是满分。掉一条说明检索退化了
+        assert_eq!(
+            big.hit,
+            big.total,
+            "306 个文件时检索漏了 {} 条：{:?}",
+            big.total - big.hit,
+            big.misses
+        );
+        // 预算没被浪费：每批挑出来的文件数应该远小于仓库规模
+        assert!(
+            big.files_per_batch < 20.0,
+            "每批塞了 {:.0} 个文件，上下文预算被撑爆了",
+            big.files_per_batch
+        );
     }
 }

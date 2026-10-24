@@ -85,6 +85,9 @@ enum Command {
         /// 直接给一份存下来的结果打分，不调用模型
         #[arg(long, value_name = "FILE", conflicts_with = "save")]
         score: Option<PathBuf>,
+        /// 只量检索：不调模型，看漏洞文件有没有被挑进上下文
+        #[arg(long, conflicts_with_all = ["save", "score"])]
+        retrieval: bool,
     },
 }
 
@@ -145,8 +148,17 @@ async fn run(cli: Cli) -> Result<()> {
         None => repl::run(&mut app).await,
         Some(Command::Ping) => commands::ping(&app).await,
         Some(Command::Demo) => review::run_demo(),
-        Some(Command::Bench { dir, save, score }) => {
-            bench::run(&dir, &app.effective(), save.as_deref(), score.as_deref()).await
+        Some(Command::Bench {
+            dir,
+            save,
+            score,
+            retrieval,
+        }) => {
+            if retrieval {
+                bench::report_retrieval(&dir, 300)
+            } else {
+                bench::run(&dir, &app.effective(), save.as_deref(), score.as_deref()).await
+            }
         }
         Some(Command::Config { action }) => match action {
             None if console::user_attended() => commands::wizard(&mut app).await,

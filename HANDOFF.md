@@ -405,6 +405,30 @@ does not silently invalidate the corpus. A test fails if a marker is missing or 
 Numbers from the last complete run are in the README. If batches fail (quota, network) the report
 says so at the top — an incomplete run is not a measurement.
 
+### Measuring retrieval (no model, runs in CI)
+
+The model never sees the repository, only the files retrieval selects for each batch. If the file
+holding the bug is not among them, judgement quality is irrelevant. So there is a third measurement
+that needs no API calls:
+
+```rust
+retrieval_recall(root, rows, budget)   // 每条标注的文件，有没有被它那一批检索出来
+```
+
+`bench/ai/fixtures` is copied into a temp dir and padded with generated distractor modules —
+plausible-looking files that share vocabulary with the checklist (auth, session, coupon, upload),
+so retrieval has to actually discriminate. On 306 files: 15/15 found, ~9 files per batch.
+
+It found a real defect immediately. Keyword extraction was using the Chinese title and detect point,
+which cannot match English source at all; the only working signal was the per-category hint list,
+and two planted bugs in `api.py` were never retrieved (13/15). Adding `title_en` to the keyword set
+fixed both. The test now asserts 15/15 — it is a pure function, so a regression should fail loudly
+rather than be averaged away.
+
+Caveat worth keeping: the distractors are synthetic. 100% here does not promise 100% on a real
+repository, only that the mechanism is not obviously broken and that a change to keyword extraction
+moves the number in a visible way.
+
 ---
 
 ## 11. Known gaps and next steps

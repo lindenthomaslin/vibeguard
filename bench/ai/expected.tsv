@@ -9,27 +9,27 @@
 # 只标「本地规则判不了、必须靠读上下文」的问题——本地规则覆盖的条目根本不会
 # 交给模型（`covered_ids()` 会把它们排除），标了也测不到。
 #
-# file	marker	kind	label
-app.py	bench:idor	bug	invoice is fetched by id with no ownership check
-app.py	bench:admin-noauth	bug	/admin/users has no authentication or role check
-app.py	bench:open-redirect	bug	redirect() follows a user-supplied next parameter
-app.py	bench:ssrf	bug	requests.get() on a URL taken straight from the request body
-auth.py	bench:no-rate-limit	bug	login has no attempt limit or lockout
-auth.py	bench:reset-token	bug	reset token is the current unix timestamp, trivially guessable
-auth.py	bench:reset-no-expiry	bug	reset token never expires and is not single-use checked
-auth.py	bench:cookie-flags	bug	session cookie built without HttpOnly and Secure
-api.py	bench:mass-assignment	bug	PATCH copies every key from the body onto the model (is_admin included)
-api.py	bench:delete-noauth	bug	project delete checks login but not ownership
-api.py	bench:no-csrf	bug	state-changing POST accepts form posts with no CSRF token
-billing.py	bench:coupon-reuse	bug	coupon can be redeemed unlimited times
-billing.py	bench:negative-quantity	bug	quantity is not validated, a negative value credits the account
-billing.py	bench:race	bug	balance is checked then debited with no lock (double spend)
-helpers.py	bench:jwt-no-verify	bug	JWT decoded with verify_signature disabled
-helpers.py	bench:trap-env-secret	trap	secret comes from the environment, no default
-helpers.py	bench:trap-debug-flag	trap	debug flag is off unless the env var says otherwise
-helpers.py	bench:trap-sql-whitelist	trap	f-string SQL, but the column is picked from a fixed set
-helpers.py	bench:trap-param-query	trap	parameterised query
-helpers.py	bench:trap-subprocess-list	trap	subprocess with a list and shell=False
-helpers.py	bench:trap-safe-upload	trap	path join on a name that went through secure_filename
-helpers.py	bench:trap-json-body	trap	json.loads on the request body (not pickle)
-settings.py	bench:trap-csrf-check	trap	state-changing handler that does check a CSRF token
+# file	marker	kind	label	checklist-id（bug 必填，trap 写 -）
+app.py	bench:idor	bug	invoice is fetched by id with no ownership check	AUTHZ-01
+app.py	bench:admin-noauth	bug	/admin/users has no authentication or role check	AUTHZ-02
+app.py	bench:open-redirect	bug	redirect() follows a user-supplied next parameter	NET-04
+app.py	bench:ssrf	bug	requests.get() on a URL taken straight from the request body	NET-01
+auth.py	bench:no-rate-limit	bug	login has no attempt limit or lockout	API-02
+auth.py	bench:reset-token	bug	reset token is the current unix timestamp, trivially guessable	AUTH-12
+auth.py	bench:reset-no-expiry	bug	reset token never expires and is not single-use checked	AUTH-12
+auth.py	bench:cookie-flags	bug	session cookie built without HttpOnly and Secure	SESS-12
+api.py	bench:mass-assignment	bug	PATCH copies every key from the body onto the model (is_admin included)	INPUT-06
+api.py	bench:delete-noauth	bug	project delete checks login but not ownership	AUTHZ-17
+api.py	bench:no-csrf	bug	state-changing POST accepts form posts with no CSRF token	SESS-16
+billing.py	bench:coupon-reuse	bug	coupon can be redeemed unlimited times	BIZ-02
+billing.py	bench:negative-quantity	bug	quantity is not validated, a negative value credits the account	BIZ-03
+billing.py	bench:race	bug	balance is checked then debited with no lock (double spend)	AVAIL-08
+helpers.py	bench:jwt-no-verify	bug	JWT decoded with verify_signature disabled	SESS-01
+helpers.py	bench:trap-env-secret	trap	secret comes from the environment, no default	-
+helpers.py	bench:trap-debug-flag	trap	debug flag is off unless the env var says otherwise	-
+helpers.py	bench:trap-sql-whitelist	trap	f-string SQL, but the column is picked from a fixed set	-
+helpers.py	bench:trap-param-query	trap	parameterised query	-
+helpers.py	bench:trap-subprocess-list	trap	subprocess with a list and shell=False	-
+helpers.py	bench:trap-safe-upload	trap	path join on a name that went through secure_filename	-
+helpers.py	bench:trap-json-body	trap	json.loads on the request body (not pickle)	-
+settings.py	bench:trap-csrf-check	trap	state-changing handler that does check a CSRF token	-

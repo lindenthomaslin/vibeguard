@@ -139,6 +139,12 @@ Read that as: it does not miss what is planted, and it is noisy — roughly thre
 one real problem. Deduplicating same-line reports is the next number to move. Every scan also
 states how much of the checklist it covered, so "clean" and "not looked at" never look the same.
 
+There is a third measurement, because the model only ever sees the files retrieval hands it: on a
+306-file repository, the files that need judging are **all** retrieved (15/15), and about nine files
+go into each batch. Before the checklist's English titles were added to the keyword set it was
+13/15 — two planted bugs sat in a file retrieval never showed the model. That is the failure mode
+worth measuring: a perfect judge that never sees the evidence scores zero.
+
 The report files are worth adding to your `.gitignore`.
 
 ## Docs

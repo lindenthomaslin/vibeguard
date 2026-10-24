@@ -356,7 +356,7 @@ const INDEX_FILE_BUDGET: usize = 200_000;
 /// 整个索引的上限：内存里同时放正文和小写副本，别把大仓库撑爆
 const INDEX_TOTAL_BUDGET: usize = 8_000_000;
 /// 一批最多附多少代码
-const RETRIEVE_BUDGET: usize = 16_000;
+pub const RETRIEVE_BUDGET: usize = 16_000;
 /// 单个文件最多摘多少：给的是「命中位置前后几十行」，不是整个文件，
 /// 所以可以多带几个文件，而不是让一个 10KB 的文件吃掉全部预算
 const SNIPPET_BUDGET: usize = 3_000;
@@ -574,7 +574,9 @@ fn excerpt(doc: &Doc, keys: &[String], max: usize) -> String {
 /// 单条条目的检索关键词
 fn item_keywords(item: &VulnItem) -> Vec<String> {
     let mut out: std::collections::BTreeSet<String> = Default::default();
-    for text in [&item.title, &item.detect_point] {
+    // 中文标题和检测点分不出词（源码是英文的，切出来也匹配不上），
+    // 真正有用的是英文标题——它和代码用同一套词
+    for text in [&item.title_en, &item.title, &item.detect_point] {
         for tok in tokens(text) {
             out.insert(tok);
         }
@@ -584,7 +586,7 @@ fn item_keywords(item: &VulnItem) -> Vec<String> {
     }
     // 一条条目用不着几十个词，太多会互相稀释
     let mut v: Vec<String> = out.into_iter().collect();
-    v.truncate(24);
+    v.truncate(32);
     v
 }
 
