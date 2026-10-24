@@ -68,7 +68,17 @@ flowchart LR
 
 ## 安装
 
-一行装好，不需要 Rust：
+有 Node 的话：
+
+```bash
+npm install -g vibeguard
+vibeguard
+```
+
+npm 包只是个壳：`postinstall` 按平台下载预编译的二进制并校验 SHA-256，装完 `vibeguard` 就在
+PATH 里了。
+
+没有 Node 也没有 Rust：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lindenthomaslin/vibeguard/master/install.sh | sh

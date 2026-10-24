@@ -1,0 +1,44 @@
+{
+  "name": "vibeguard",
+  "version": "0.1.0",
+  "description": "A terminal security reviewer for vibe-coded projects",
+  "keywords": [
+    "security",
+    "scanner",
+    "audit",
+    "vibe-coding",
+    "llm",
+    "cli"
+  ],
+  "homepage": "https://thomas-ai.space",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lindenthomaslin/vibeguard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lindenthomaslin/vibeguard/issues"
+  },
+  "license": "UNLICENSED",
+  "bin": {
+    "vibeguard": "bin/vibeguard.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin/",
+    "install.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

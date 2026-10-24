@@ -8,3 +8,7 @@ sessions/
 
 # 标定跑出来的结果存档（--save 默认落在这里）
 bench/ai/*.json
+
+# npm 包：vendor/ 是 postinstall 下载的二进制，tgz 是 npm pack 的产物
+npm/vendor/
+npm/*.tgz

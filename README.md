@@ -72,7 +72,17 @@ delete commands. A security tool that can rewrite your files is itself an attack
 
 ## Install
 
-One line, no Rust toolchain:
+If you have Node:
+
+```bash
+npm install -g vibeguard
+vibeguard
+```
+
+The npm package is a thin wrapper — `postinstall` fetches the prebuilt binary for your platform and
+checks its SHA-256, so `vibeguard` is on your PATH immediately after install.
+
+No Node, no Rust:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lindenthomaslin/vibeguard/master/install.sh | sh
