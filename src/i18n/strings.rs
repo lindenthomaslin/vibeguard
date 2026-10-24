@@ -1169,4 +1169,22 @@ pub static TABLE: &[(&str, &str)] = &[
     ("界面语言", "Language"),
     ("默认语言", "Default"),
     ("中文界面", "Chinese interface"),
+    ("是，信任它", "Yes, trust it"),
+    (
+        "可以在这里执行命令、修改文件",
+        "commands and edits are allowed here",
+    ),
+    ("否，只读", "No, read-only"),
+    (
+        "本次会话不写文件、不跑命令",
+        "this session cannot write files or run commands",
+    ),
+    ("强调色", "Accent"),
+    ("默认的青", "the default teal"),
+    ("樱花粉", "sakura pink"),
+    ("海蓝", "ocean blue"),
+    ("紫罗兰", "violet"),
+    ("琥珀", "amber"),
+    ("青柠", "lime"),
+    ("无彩", "monochrome"),
 ];

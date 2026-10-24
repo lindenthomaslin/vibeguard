@@ -115,6 +115,9 @@ Early, but it does real work. Two stages, one report:
 - An unchanged repo costs **zero** requests; one edited file costs 3 instead of 7.
 - Plan mode can still investigate: it refuses writes but allows read-only commands (`rg`, `find`,
   `ls`, `cat`, `git log`), so it greps instead of reading files one at a time.
+- A cloned repo cannot act on its own: the first start in a directory asks whether you trust it.
+  Say no — or press Esc — and the session stays read-only, because a repository is attacker-controlled
+  input and a comment that says "ignore previous instructions" is only text until something obeys it.
 
 **How accurate is it?** Measured, not asserted.
 

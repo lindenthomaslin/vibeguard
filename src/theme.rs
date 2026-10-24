@@ -69,6 +69,81 @@ impl FontStyle {
     }
 }
 
+/// 强调色：边框、品牌字、输入前缀、状态栏标签都用它。
+///
+/// 主题定明暗，字形定框线，强调色定「这套界面是什么颜色」——三个维度独立，
+/// 所以 `dark + anime + ocean` 这种组合也能用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Accent {
+    #[default]
+    Teal,
+    Sakura,
+    Ocean,
+    Violet,
+    Amber,
+    Lime,
+    Mono,
+}
+
+impl Accent {
+    pub const ALL: [Accent; 7] = [
+        Accent::Teal,
+        Accent::Sakura,
+        Accent::Ocean,
+        Accent::Violet,
+        Accent::Amber,
+        Accent::Lime,
+        Accent::Mono,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Accent::Teal => "teal",
+            Accent::Sakura => "sakura",
+            Accent::Ocean => "ocean",
+            Accent::Violet => "violet",
+            Accent::Amber => "amber",
+            Accent::Lime => "lime",
+            Accent::Mono => "mono",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" => None,
+            "teal" | "default" | "青" => Some(Accent::Teal),
+            "sakura" | "pink" | "樱" => Some(Accent::Sakura),
+            "ocean" | "blue" | "蓝" => Some(Accent::Ocean),
+            "violet" | "purple" | "紫" => Some(Accent::Violet),
+            "amber" | "gold" | "琥珀" => Some(Accent::Amber),
+            "lime" | "green" | "绿" => Some(Accent::Lime),
+            "mono" | "grey" | "gray" | "灰" => Some(Accent::Mono),
+            _ => None,
+        }
+    }
+
+    /// 深色底和浅色底各一份。同一个名字在浅色底上必须压暗压饱和，
+    /// 否则边框细、背景亮，整块糊在一起。
+    pub fn color(self, theme: Theme) -> Color {
+        match (self, theme) {
+            (Accent::Teal, Theme::Dark) => rgb(0x6F_D3_E0),
+            (Accent::Teal, Theme::Light) => rgb(0x0F_6E_7C),
+            (Accent::Sakura, Theme::Dark) => rgb(0xF7_A8_C8),
+            (Accent::Sakura, Theme::Light) => rgb(0xB0_3A_6B),
+            (Accent::Ocean, Theme::Dark) => rgb(0x5A_A9_F0),
+            (Accent::Ocean, Theme::Light) => rgb(0x1B_5F_A8),
+            (Accent::Violet, Theme::Dark) => rgb(0xB6_9C_F0),
+            (Accent::Violet, Theme::Light) => rgb(0x6A_4B_B5),
+            (Accent::Amber, Theme::Dark) => rgb(0xE8_B4_57),
+            (Accent::Amber, Theme::Light) => rgb(0x8A_5A_00),
+            (Accent::Lime, Theme::Dark) => rgb(0x9B_D4_6A),
+            (Accent::Lime, Theme::Light) => rgb(0x4A_7A_1E),
+            (Accent::Mono, Theme::Dark) => rgb(0xC8_C8_C8),
+            (Accent::Mono, Theme::Light) => rgb(0x3A_3A_3A),
+        }
+    }
+}
+
 const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
@@ -168,11 +243,18 @@ impl Default for Look {
 
 impl Look {
     pub fn new(theme: Theme, font: FontStyle) -> Self {
+        Self::with_accent(theme, font, None)
+    }
+
+    /// 显式选了强调色就听它的；没选时动漫字形默认樱花粉，其余用主题自带的青色
+    pub fn with_accent(theme: Theme, font: FontStyle, accent: Option<Accent>) -> Self {
         let mut palette = match theme {
             Theme::Dark => DARK,
             Theme::Light => LIGHT,
         };
-        if font == FontStyle::Anime {
+        if let Some(accent) = accent {
+            palette.accent = accent.color(theme);
+        } else if font == FontStyle::Anime {
             palette.accent = match theme {
                 Theme::Dark => SAKURA_DARK,
                 Theme::Light => SAKURA_LIGHT,
@@ -191,9 +273,10 @@ impl Look {
 
     /// 从配置读。配置项已经校验过，认不出来就退回默认值。
     pub fn from_config(cfg: &crate::config::Config) -> Self {
-        Self::new(
+        Self::with_accent(
             Theme::parse(&cfg.theme).unwrap_or_default(),
             FontStyle::parse(&cfg.font_style).unwrap_or_default(),
+            Accent::parse(&cfg.accent),
         )
     }
 
@@ -364,5 +447,51 @@ mod tests {
         assert_eq!(look.theme, Theme::Dark);
         assert_eq!(look.font, FontStyle::Default);
         assert_eq!(look.glyphs.user, "›");
+    }
+    #[test]
+    fn an_explicit_accent_beats_the_font_default() {
+        let anime = Look::new(Theme::Dark, FontStyle::Anime);
+        let ocean = Look::with_accent(Theme::Dark, FontStyle::Anime, Some(Accent::Ocean));
+        assert_ne!(anime.palette.accent, ocean.palette.accent);
+        assert_eq!(ocean.palette.accent, Accent::Ocean.color(Theme::Dark));
+    }
+
+    #[test]
+    fn every_accent_has_a_distinct_colour_on_both_backgrounds() {
+        for theme in Theme::ALL {
+            let mut seen = std::collections::BTreeSet::new();
+            for accent in Accent::ALL {
+                assert!(
+                    seen.insert(format!("{:?}", accent.color(theme))),
+                    "{} 在 {theme:?} 上和别的强调色撞了",
+                    accent.label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn accent_names_round_trip() {
+        for accent in Accent::ALL {
+            assert_eq!(Accent::parse(accent.label()), Some(accent));
+        }
+        assert_eq!(Accent::parse(""), None);
+    }
+
+    #[test]
+    fn the_config_accent_reaches_the_palette() {
+        let mut cfg = crate::config::Config {
+            accent: "ocean".to_string(),
+            ..Default::default()
+        };
+        let look = Look::from_config(&cfg);
+        assert_eq!(look.palette.accent, Accent::Ocean.color(look.theme));
+        // 空值 = 跟随主题，不改强调色
+        cfg.accent.clear();
+        let plain = Look::from_config(&cfg);
+        assert_eq!(
+            plain.palette.accent,
+            Look::new(plain.theme, plain.font).palette.accent
+        );
     }
 }

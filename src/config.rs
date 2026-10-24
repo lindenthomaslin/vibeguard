@@ -33,6 +33,7 @@ pub const KEYS: &[&str] = &[
     "theme",
     "font_style",
     "lang",
+    "accent",
 ];
 
 /// 默认的工具轮数上限：一个真实的多步任务（读文件 → 改 → 跑测试）二三十轮很常见，
@@ -157,6 +158,12 @@ pub struct Config {
     pub font_style: String,
     /// 界面语言：en（默认）/ zh
     pub lang: String,
+    /// 强调色：teal / sakura / ocean / violet / amber / lime / mono；空表示跟随主题
+    #[serde(default)]
+    pub accent: String,
+    /// 已经点过「信任」的工作区（规范化后的绝对路径）
+    #[serde(default)]
+    pub trusted_workspaces: Vec<String>,
 
     #[serde(skip)]
     pub key_source: KeySource,
@@ -178,6 +185,8 @@ impl Default for Config {
             theme: "dark".to_string(),
             font_style: "default".to_string(),
             lang: "en".to_string(),
+            accent: String::new(),
+            trusted_workspaces: Vec::new(),
             key_source: KeySource::Unset,
         }
     }
@@ -389,6 +398,7 @@ impl Config {
             "theme" => self.theme.clone(),
             "font_style" => self.font_style.clone(),
             "lang" => self.lang.clone(),
+            "accent" => self.accent.clone(),
             _ => bail!(
                 "{}",
                 pick(
@@ -397,6 +407,29 @@ impl Config {
                 )
             ),
         })
+    }
+
+    /// 这个目录点过「信任」吗。
+    ///
+    /// 比的是规范化后的绝对路径：用相对路径和绝对路径启动同一个项目，
+    /// 不能让用户被问第二遍。
+    pub fn is_trusted(&self, dir: &std::path::Path) -> bool {
+        let Ok(canon) = dir.canonicalize() else {
+            return false;
+        };
+        self.trusted_workspaces
+            .iter()
+            .any(|p| std::path::Path::new(p) == canon)
+    }
+
+    /// 记下「这个目录我信任」。返回规范化后的路径；路径不存在时返回 None。
+    pub fn trust_workspace(&mut self, dir: &std::path::Path) -> Option<String> {
+        let canon = dir.canonicalize().ok()?;
+        let shown = canon.display().to_string();
+        if !self.trusted_workspaces.iter().any(|p| p == &shown) {
+            self.trusted_workspaces.push(shown.clone());
+        }
+        Some(shown)
     }
 
     /// 设置单个配置项（用于 `config set`）。先在副本上修改并校验，
@@ -484,6 +517,26 @@ impl Config {
                     Some(PathBuf::from(v))
                 }
             }
+            "accent" => {
+                let name = v.to_lowercase();
+                if name.is_empty() || crate::theme::Accent::parse(&name).is_some() {
+                    self.accent = name;
+                } else {
+                    bail!(
+                        "{}",
+                        pick(
+                            format!(
+                                "accent 可选值为 {}，收到 `{v}`",
+                                "teal / sakura / ocean / violet / amber / lime / mono"
+                            ),
+                            format!(
+                                "accent must be one of {}; got `{v}`",
+                                "teal / sakura / ocean / violet / amber / lime / mono"
+                            ),
+                        )
+                    );
+                }
+            }
             "theme" => {
                 let theme = v.to_lowercase();
                 if matches!(theme.as_str(), "dark" | "light") {
@@ -555,6 +608,7 @@ impl Config {
             "theme" => self.theme = d.theme,
             "font_style" => self.font_style = d.font_style,
             "lang" => self.lang = d.lang,
+            "accent" => self.accent = d.accent,
             _ => bail!(
                 "{}",
                 pick(
@@ -799,5 +853,33 @@ mod tests {
 
         cfg.unset("max_tool_rounds").unwrap();
         assert_eq!(cfg.max_tool_rounds, DEFAULT_MAX_TOOL_ROUNDS);
+    }
+    #[test]
+    fn trusting_a_workspace_round_trips_through_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = Config::default();
+        assert!(!cfg.is_trusted(dir.path()));
+        let shown = cfg.trust_workspace(dir.path()).expect("应当能规范化");
+        assert!(cfg.is_trusted(dir.path()));
+        // 记的是规范化后的绝对路径，同一目录再来一次不会重复
+        cfg.trust_workspace(dir.path());
+        assert_eq!(cfg.trusted_workspaces.len(), 1);
+        assert_eq!(cfg.trusted_workspaces[0], shown);
+    }
+
+    #[test]
+    fn an_untrusted_workspace_stays_untrusted() {
+        let cfg = Config::default();
+        assert!(!cfg.is_trusted(std::path::Path::new("/definitely/not/here")));
+    }
+
+    #[test]
+    fn accent_accepts_the_known_names_and_rejects_the_rest() {
+        let mut cfg = Config::default();
+        cfg.set("accent", "ocean").unwrap();
+        assert_eq!(cfg.accent, "ocean");
+        cfg.set("accent", "").unwrap();
+        assert!(cfg.accent.is_empty(), "空值表示跟随主题");
+        assert!(cfg.set("accent", "chartreuse").is_err());
     }
 }

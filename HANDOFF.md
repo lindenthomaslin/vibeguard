@@ -255,6 +255,24 @@ In the history panel (`/sessions`, `/search`):
 | `theme` | `dark` | `dark` / `light` |
 | `font_style` | `default` | `default` / `anime` |
 | `lang` | `en` | `en` / `zh` — interface language; `/lang zh` switches at runtime |
+| `accent` | unset | `teal` / `sakura` / `ocean` / `violet` / `amber` / `lime` / `mono`; empty follows the theme |
+| `trusted_workspaces` | empty | Directories you answered "trust" for. Written by the startup prompt, not by `config set` |
+
+### Trusting a workspace
+
+The first time you start in a directory, it asks: *Trust this workspace?* The cursor starts on
+**No** — granting trust takes a deliberate ↑ then Enter, and Esc counts as No.
+
+- **Yes** writes the canonical path to `trusted_workspaces` and never asks again for that directory.
+- **No** sets `permission_mode` to `readonly` *in memory only*. The config file is untouched, so the
+  next start asks again, and `/trust` is there if you change your mind mid-session.
+
+The reason it exists: the agent reads the repository, and a repository is attacker-controlled input.
+A comment saying "ignore previous instructions" is just text until something acts on it. This gate
+means a cloned repo cannot get the agent to run commands or write files until you have said so.
+
+It is a speed bump, not a sandbox: it guards the first turn, and `/permissions full` is still one
+keystroke away. Anyone who needs a real boundary should run the tool in a container.
 
 ### Interface language
 

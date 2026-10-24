@@ -229,6 +229,10 @@ async fn event_loop(app: &mut App, terminal: &mut DefaultTerminal, gfx: Graphics
         repaint: false,
     };
     session.welcome();
+    // 第一次在这个目录里启动：先问要不要信任。
+    // 仓库里的注释、文档、测试夹具都可能被模型当成「指令」读进去，
+    // 没点过头之前不主动放开写入和执行。
+    session.maybe_ask_trust();
 
     let mut dirty = true;
     let result = loop {
@@ -409,6 +413,8 @@ impl Session<'_> {
                     self.set_theme(theme.next());
                 }
                 Action::SetLang(lang) => self.apply_lang(lang),
+                Action::Trust(yes) => self.answer_trust(yes),
+                Action::SetAccent(accent) => self.set_accent(accent),
             },
             Msg::Term(Event::Paste(text)) => self.state.on_paste(&text),
             // 窗口尺寸变了，启动画面可能换档或者被收起，顺带整屏重绘一次
@@ -1910,6 +1916,8 @@ impl Session<'_> {
                 _ => bail!("{}", tr("用法：/mode [plan|confirm|auto]")),
             },
             "lang" => self.set_lang(&args)?,
+            "accent" => self.set_accent_cmd(&args)?,
+            "trust" => self.trust_now()?,
             "theme" => match args.as_slice() {
                 [] => self.state.push(Entry::Block(self.appearance_lines())),
                 [name] => match Theme::parse(name) {
@@ -2142,6 +2150,101 @@ impl Session<'_> {
             );
         };
         self.apply_lang(lang);
+        Ok(())
+    }
+
+    /// 没信任过这个目录就弹一次浮层。已经信任的直接跳过，不打扰
+    fn maybe_ask_trust(&mut self) {
+        let root = std::env::current_dir().unwrap_or_default();
+        if self.app.effective().is_trusted(&root) {
+            return;
+        }
+        self.state.open_trust_picker(ui::tilde(&root));
+    }
+
+    /// 信任浮层的答复。
+    ///
+    /// 「是」写进配置，以后不再问；「否」只改内存里的权限模式，配置文件一个字不动——
+    /// 下次启动还会问一遍，用户改主意不用去翻配置文件。
+    fn answer_trust(&mut self, yes: bool) {
+        let root = std::env::current_dir().unwrap_or_default();
+        let shown = ui::tilde(&root);
+        if yes {
+            if self.app.file.trust_workspace(&root).is_none() {
+                self.state.push(Entry::Error(pick(
+                    format!("无法解析这个路径：{shown}"),
+                    format!("Cannot resolve this path: {shown}"),
+                )));
+                return;
+            }
+            if let Err(e) = self.app.save() {
+                self.state.push(Entry::Error(pick(
+                    format!("保存失败，配置文件没有改动：{e:#}"),
+                    format!("Save failed, the config file is unchanged: {e:#}"),
+                )));
+                return;
+            }
+            self.state.push(Entry::Success(pick(
+                format!("已信任 {shown}：可以执行命令、修改文件"),
+                format!("Trusted {shown}: commands and edits are allowed"),
+            )));
+        } else {
+            self.app.file.permission_mode = crate::tools::PermissionMode::ReadOnly;
+            self.state.push(Entry::Warn(pick(
+                format!(
+                    "未信任 {shown}：本次会话只读（不写文件、不跑命令）。改主意用 /trust"
+                ),
+                format!(
+                    "Not trusted {shown}: this session is read-only. Use /trust if you change your mind"
+                ),
+            )));
+        }
+    }
+
+    /// 换强调色。存进配置，下次启动照样生效
+    fn set_accent(&mut self, accent: crate::theme::Accent) {
+        self.app.file.accent = accent.label().to_string();
+        if let Err(e) = self.app.save() {
+            self.state.push(Entry::Error(pick(
+                format!("保存失败，配置文件没有改动：{e:#}"),
+                format!("Save failed, the config file is unchanged: {e:#}"),
+            )));
+            return;
+        }
+        self.state.push(Entry::Success(pick(
+            format!("强调色：{}", accent.label()),
+            format!("Accent: {}", accent.label()),
+        )));
+    }
+
+    /// `/accent [名字]`：不带参数打开选择，带参数直接换
+    fn set_accent_cmd(&mut self, args: &[&str]) -> Result<()> {
+        let Some(raw) = args.first() else {
+            let current =
+                crate::theme::Accent::parse(&self.app.effective().accent).unwrap_or_default();
+            self.state.open_accent_picker(current);
+            return Ok(());
+        };
+        let Some(accent) = crate::theme::Accent::parse(raw) else {
+            bail!(
+                "{}",
+                pick(
+                    format!(
+                        "accent 可选值为 teal / sakura / ocean / violet / amber / lime / mono，收到 `{raw}`"
+                    ),
+                    format!(
+                        "accent must be one of teal / sakura / ocean / violet / amber / lime / mono; got `{raw}`"
+                    )
+                )
+            );
+        };
+        self.set_accent(accent);
+        Ok(())
+    }
+
+    /// `/trust`：把当前目录记进信任列表
+    fn trust_now(&mut self) -> Result<()> {
+        self.answer_trust(true);
         Ok(())
     }
 

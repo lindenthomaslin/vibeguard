@@ -25,6 +25,8 @@ impl Candidate {
             "/model" => "Configure endpoint, API key, model and thinking effort",
             "/mode" => "Switch work mode: plan / confirm / auto",
             "/lang" => "Switch interface language: English / Chinese",
+            "/accent" => "Switch the accent colour (the interface's main colour)",
+            "/trust" => "Trust this workspace: allow commands and edits",
             "/scan" => "Scan a directory with local rules; --ai adds model judgement",
             "/fix" => "Generate fixes for scan findings, apply after you approve",
             "/report" => "Export the last scan as .md + .json",
@@ -53,6 +55,14 @@ pub const COMMANDS: &[Candidate] = &[
     Candidate {
         name: "/mode",
         desc: "切换工作模式：计划 / 逐条确认 / 全自动",
+    },
+    Candidate {
+        name: "/accent",
+        desc: "切换强调色（界面主色）",
+    },
+    Candidate {
+        name: "/trust",
+        desc: "信任当前工作区，允许执行与写入",
     },
     Candidate {
         name: "/lang",
@@ -174,6 +184,10 @@ pub enum Action {
     ApplyFixes(Vec<Fix>),
     /// 语言选择里按了 Enter：切到这个语言
     SetLang(Lang),
+    /// 信任浮层的答复
+    Trust(bool),
+    /// 强调色选择
+    SetAccent(crate::theme::Accent),
 }
 
 /// 逐条确认模式下的答复
@@ -225,10 +239,20 @@ struct Confirm {
     selected: usize,
 }
 
-/// 语言选择。两个选项，↑↓ 选、Enter 生效——
-/// 光靠 `/lang zh` 要背参数，打开菜单却选不了，等于没做完。
-struct LangPicker {
+/// 一个两三项的选择浮层。语言、信任工作区、强调色共用一套——
+/// 三处各写一份键盘处理和绘制，只会让其中两处慢慢长歪。
+struct Picker {
+    kind: PickerKind,
     selected: usize,
+    /// 标题里要带的上下文（信任浮层放路径，其余为空）
+    subject: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PickerKind {
+    Lang,
+    Trust,
+    Accent,
 }
 
 /// 可选的语言，顺序即菜单顺序
@@ -238,6 +262,18 @@ fn lang_desc(lang: Lang) -> &'static str {
     match lang {
         Lang::En => tr("默认语言"),
         Lang::Zh => tr("中文界面"),
+    }
+}
+
+fn accent_desc(accent: crate::theme::Accent) -> &'static str {
+    match accent {
+        crate::theme::Accent::Teal => tr("默认的青"),
+        crate::theme::Accent::Sakura => tr("樱花粉"),
+        crate::theme::Accent::Ocean => tr("海蓝"),
+        crate::theme::Accent::Violet => tr("紫罗兰"),
+        crate::theme::Accent::Amber => tr("琥珀"),
+        crate::theme::Accent::Lime => tr("青柠"),
+        crate::theme::Accent::Mono => tr("无彩"),
     }
 }
 
@@ -277,7 +313,7 @@ pub struct AppState {
     /// 逐条确认模式下等待答复的改动
     confirm: Option<Confirm>,
     /// `/lang` 打开的语言选择；打开时键盘归它
-    picker: Option<LangPicker>,
+    picker: Option<Picker>,
 }
 
 impl AppState {
@@ -378,12 +414,41 @@ impl AppState {
             });
         }
         if let Some(p) = &self.picker {
+            let (title, items) = match p.kind {
+                PickerKind::Lang => (
+                    tr("界面语言").to_string(),
+                    LANGS
+                        .iter()
+                        .map(|&l| (l.label().to_string(), lang_desc(l).to_string()))
+                        .collect(),
+                ),
+                PickerKind::Trust => (
+                    pick(
+                        format!("信任这个工作区？{}", p.subject),
+                        format!("Trust this workspace? {}", p.subject),
+                    ),
+                    vec![
+                        (
+                            tr("是，信任它").to_string(),
+                            tr("可以在这里执行命令、修改文件").to_string(),
+                        ),
+                        (
+                            tr("否，只读").to_string(),
+                            tr("本次会话不写文件、不跑命令").to_string(),
+                        ),
+                    ],
+                ),
+                PickerKind::Accent => (
+                    tr("强调色").to_string(),
+                    crate::theme::Accent::ALL
+                        .iter()
+                        .map(|&a| (a.label().to_string(), accent_desc(a).to_string()))
+                        .collect(),
+                ),
+            };
             return Some(Choice {
-                title: tr("界面语言").into(),
-                items: LANGS
-                    .iter()
-                    .map(|&l| (l.label().to_string(), lang_desc(l).to_string()))
-                    .collect(),
+                title,
+                items,
                 selected: p.selected,
             });
         }
@@ -622,31 +687,50 @@ impl AppState {
     }
 
     fn on_picker_key(&mut self, key: KeyEvent) -> Action {
-        let n = LANGS.len();
-        let mut close = false;
-        let Some(p) = self.picker.as_mut() else {
+        let Some(p) = self.picker.as_ref() else {
             return Action::None;
         };
-        let action = match key.code {
+        let kind = p.kind;
+        let selected = p.selected;
+        let n = match kind {
+            PickerKind::Lang => LANGS.len(),
+            PickerKind::Trust => 2,
+            PickerKind::Accent => crate::theme::Accent::ALL.len(),
+        };
+        let mut move_to = |sel: usize| {
+            if let Some(p) = self.picker.as_mut() {
+                p.selected = sel;
+            }
+        };
+        match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                p.selected = (p.selected + n - 1) % n;
+                move_to((selected + n - 1) % n);
                 Action::None
             }
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
-                p.selected = (p.selected + 1) % n;
+                move_to((selected + 1) % n);
                 Action::None
             }
-            KeyCode::Enter => Action::SetLang(LANGS[p.selected]),
+            KeyCode::Enter => {
+                self.picker = None;
+                match kind {
+                    PickerKind::Lang => Action::SetLang(LANGS[selected]),
+                    // 第一项是「信任」，第二项是「只读」
+                    PickerKind::Trust => Action::Trust(selected == 0),
+                    PickerKind::Accent => Action::SetAccent(crate::theme::Accent::ALL[selected]),
+                }
+            }
+            // 信任浮层按 Esc 当「不信任」：关掉窗口不能等于放行
             KeyCode::Esc | KeyCode::Char('q') => {
-                close = true;
-                Action::None
+                self.picker = None;
+                if kind == PickerKind::Trust {
+                    Action::Trust(false)
+                } else {
+                    Action::None
+                }
             }
             _ => Action::None,
-        };
-        if close {
-            self.picker = None;
         }
-        action
     }
 
     fn on_confirm_key(&mut self, key: KeyEvent) -> Action {
@@ -753,7 +837,34 @@ impl AppState {
     pub fn open_lang_picker(&mut self) {
         let current = crate::i18n::current();
         let selected = LANGS.iter().position(|&l| l == current).unwrap_or(0);
-        self.picker = Some(LangPicker { selected });
+        self.picker = Some(Picker {
+            kind: PickerKind::Lang,
+            selected,
+            subject: String::new(),
+        });
+    }
+
+    /// 打开信任浮层。`subject` 是显示用的路径，光标默认停在「否」上——
+    /// 需要用户主动往上挪一格才算信任。
+    pub fn open_trust_picker(&mut self, subject: String) {
+        self.picker = Some(Picker {
+            kind: PickerKind::Trust,
+            selected: 1,
+            subject,
+        });
+    }
+
+    /// 打开强调色选择，光标停在当前色上
+    pub fn open_accent_picker(&mut self, current: crate::theme::Accent) {
+        let selected = crate::theme::Accent::ALL
+            .iter()
+            .position(|&a| a == current)
+            .unwrap_or(0);
+        self.picker = Some(Picker {
+            kind: PickerKind::Accent,
+            selected,
+            subject: String::new(),
+        });
     }
 
     pub fn close_picker(&mut self) {
@@ -1484,5 +1595,52 @@ mod tests {
         assert_eq!(app.on_key(key(KeyCode::Esc)), Action::None);
         assert!(app.choice().is_none(), "Esc 之后选择区应当关掉");
         assert!(app.input_active(), "关掉之后输入框要恢复");
+    }
+    #[test]
+    fn the_trust_picker_defaults_to_no() {
+        let mut app = AppState::new();
+        app.open_trust_picker("~/proj".into());
+        let choice = app.choice().expect("信任浮层应当出现");
+        assert_eq!(choice.selected, 1, "光标要停在「否」上，信任得自己往上挪");
+        assert_eq!(choice.items.len(), 2);
+        assert!(choice.title.contains("~/proj"));
+        // 直接回车 = 不信任
+        assert_eq!(app.on_key(key(KeyCode::Enter)), Action::Trust(false));
+    }
+
+    #[test]
+    fn trusting_needs_deliberate_input() {
+        let mut app = AppState::new();
+        app.open_trust_picker("/tmp".into());
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.on_key(key(KeyCode::Enter)), Action::Trust(true));
+    }
+
+    #[test]
+    fn esc_on_the_trust_picker_does_not_grant_trust() {
+        let mut app = AppState::new();
+        app.open_trust_picker("/tmp".into());
+        assert_eq!(app.on_key(key(KeyCode::Esc)), Action::Trust(false));
+        assert!(app.choice().is_none(), "浮层要关掉");
+    }
+
+    #[test]
+    fn the_accent_picker_returns_the_highlighted_colour() {
+        use crate::theme::Accent;
+        let mut app = AppState::new();
+        app.open_accent_picker(Accent::Ocean);
+        let choice = app.choice().expect("强调色浮层应当出现");
+        assert_eq!(
+            choice.selected,
+            Accent::ALL
+                .iter()
+                .position(|&a| a == Accent::Ocean)
+                .unwrap()
+        );
+        assert_eq!(choice.items.len(), Accent::ALL.len());
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Action::SetAccent(Accent::Ocean)
+        );
     }
 }

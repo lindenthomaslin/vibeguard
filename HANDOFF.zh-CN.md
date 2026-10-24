@@ -226,6 +226,22 @@ confirm 那个握手是这段代码里最值得看的地方：`start_chat` 发�
 | `theme` | `dark` | `dark` / `light` |
 | `font_style` | `default` | `default` / `anime` |
 | `lang` | `en` | `en` / `zh`——界面语言，`/lang zh` 运行时切换 |
+| `accent` | 不设 | `teal` / `sakura` / `ocean` / `violet` / `amber` / `lime` / `mono`；空表示跟随主题 |
+| `trusted_workspaces` | 空 | 你答过「信任」的目录。由启动时的浮层写入，`config set` 不碰它 |
+
+### 信任工作区
+
+第一次在某个目录里启动会问一句：**信任这个工作区吗？** 光标默认停在「否」上——要信任得自己
+往上挪一格再回车，按 Esc 也等于「否」。
+
+- **是**：把规范化后的绝对路径写进 `trusted_workspaces`，这个目录以后不再问。
+- **否**：**只在内存里**把 `permission_mode` 改成只读，配置文件一个字不动。下次启动还会问，
+  中途改主意用 `/trust`。
+
+为什么要这个：模型会读仓库，而仓库是攻击者可控的输入。一句「忽略之前的指令」在有人执行它之前
+只是文本。这道闸的意思是：克隆下来的仓库不能自己让 Agent 跑命令、写文件，得你先点头。
+
+它是个减速带，不是沙箱：它只管第一次，`/permissions full` 仍然一步可达。真要边界，请放进容器跑。
 
 ### 界面语言
 
