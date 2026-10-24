@@ -14,7 +14,9 @@
   <img alt="rust" src="https://img.shields.io/badge/rust-2024-orange">
   <img alt="build" src="https://img.shields.io/badge/build-single%20binary-informational">
   <img alt="status" src="https://img.shields.io/badge/status-early-yellow">
-  <img alt="tests" src="https://img.shields.io/badge/tests-325%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-363%20passing-brightgreen">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
+  <a href="https://www.npmjs.com/package/vibeguard"><img alt="npm" src="https://img.shields.io/npm/v/vibeguard"></a>
 </p>
 
 <p align="center">
@@ -190,4 +192,6 @@ English is the default language for this project's docs; the Chinese version is
 
 ## License
 
-Not chosen yet. Ask before you redistribute.
+MIT — see [LICENSE](LICENSE). Use it, fork it, ship it inside a company; just keep the copyright
+notice. It comes with no warranty, which for a security tool means: a clean scan is not a
+guarantee that the code is safe.

@@ -18,7 +18,7 @@
   "bugs": {
     "url": "https://github.com/lindenthomaslin/vibeguard/issues"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "bin": {
     "vibeguard": "bin/vibeguard.js"
   },
@@ -28,7 +28,8 @@
   "files": [
     "bin/",
     "install.js",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"

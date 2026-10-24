@@ -14,7 +14,7 @@
   <img alt="rust" src="https://img.shields.io/badge/rust-2024-orange">
   <img alt="build" src="https://img.shields.io/badge/build-single%20binary-informational">
   <img alt="status" src="https://img.shields.io/badge/status-early-yellow">
-  <img alt="tests" src="https://img.shields.io/badge/tests-325%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-363%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -164,4 +164,5 @@ AI 那一层还没有标定集，所以把它的输出当**线索**，别当结�
 
 ## 许可
 
-还没定。转载或分发之前请先问一声。
+MIT，见 [LICENSE](LICENSE)。随便用、随便改、可以放进公司内部；保留版权声明就行。
+它不带任何担保——对一个安全工具来说，这句话的意思是：**扫描干净不等于代码安全**。
