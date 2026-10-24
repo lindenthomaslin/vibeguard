@@ -35,7 +35,8 @@ esac
 target="${arch_part}-${os_part}"
 
 # ---- 版本 ----
-# 不指定就取 latest：让用户装到的是最新的修复，而不是一年前的 tag
+# 包名里不带版本号，版本只在路径里。这样 `latest` 是个固定地址，
+# 不用先问 GitHub API——那个接口对匿名请求限流，装的人一多就 403。
 version="${VIBEGUARD_VERSION:-latest}"
 if [ "$version" = "latest" ]; then
     base="https://github.com/${REPO}/releases/latest/download"
@@ -44,17 +45,7 @@ else
 fi
 
 # 包名要和 release.yml 里拼出来的一致
-if [ "$version" = "latest" ]; then
-    # latest 的下载地址不带版本号，只能先问一次实际 tag
-    need curl
-    tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
-    [ -n "$tag" ] || die "查不到最新版本（仓库还没有 release？）"
-else
-    tag="$version"
-fi
-
-name="vibeguard-${tag}-${target}"
+name="vibeguard-${target}"
 url="${base}/${name}.tar.gz"
 
 # ---- 下载 ----
@@ -106,7 +97,7 @@ fi
 chmod 755 "$dir/vibeguard"
 
 say ""
-say "装好了：$dir/vibeguard（$tag · $target）"
+say "装好了：$dir/vibeguard（$version · $target）"
 
 case ":${PATH}:" in
     *":${dir}:"*) ;;
