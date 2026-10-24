@@ -72,6 +72,24 @@ delete commands. A security tool that can rewrite your files is itself an attack
 
 ## Install
 
+One line, no Rust toolchain:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lindenthomaslin/vibeguard/master/install.sh | sh
+```
+
+It picks the right binary for macOS or Linux (Intel and ARM), checks the SHA-256, and drops it in
+`/usr/local/bin` or `~/.local/bin`. Override with `VIBEGUARD_INSTALL_DIR=... sh install.sh` or pin a
+version with `VIBEGUARD_VERSION=v0.1.0`.
+
+Already have cargo?
+
+```bash
+cargo install --git https://github.com/lindenthomaslin/vibeguard
+```
+
+From source, if you want to hack on it:
+
 ```bash
 git clone https://github.com/lindenthomaslin/vibeguard.git
 cd vibeguard

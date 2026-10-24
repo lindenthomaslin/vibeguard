@@ -68,6 +68,24 @@ flowchart LR
 
 ## 安装
 
+一行装好，不需要 Rust：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lindenthomaslin/vibeguard/master/install.sh | sh
+```
+
+自动挑 macOS / Linux 的 Intel 或 ARM 包，校验 SHA-256，装到 `/usr/local/bin` 或
+`~/.local/bin`。想换目录用 `VIBEGUARD_INSTALL_DIR=... sh install.sh`，想固定版本用
+`VIBEGUARD_VERSION=v0.1.0`。
+
+已经装了 cargo 的话：
+
+```bash
+cargo install --git https://github.com/lindenthomaslin/vibeguard
+```
+
+想改代码就从源码构建：
+
 ```bash
 git clone https://github.com/lindenthomaslin/vibeguard.git
 cd vibeguard
