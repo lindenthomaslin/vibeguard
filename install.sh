@@ -91,19 +91,19 @@ mkdir -p "$dir"
 if [ -w "$dir" ]; then
     mv "$tmp/vibeguard" "$dir/vibeguard"
 else
-    say "需要管理员权限写入 $dir"
+    say "需要管理员权限写入 ${dir}"
     sudo mv "$tmp/vibeguard" "$dir/vibeguard"
 fi
 chmod 755 "$dir/vibeguard"
 
 say ""
-say "装好了：$dir/vibeguard（$version · $target）"
+say "装好了：${dir}/vibeguard（${version} · ${target}）"
 
 case ":${PATH}:" in
     *":${dir}:"*) ;;
     *)
         say ""
-        say "$dir 不在 PATH 里，加一行到你的 shell 配置："
+        say "${dir} 不在 PATH 里，加一行到你的 shell 配置："
         say "  export PATH=\"${dir}:\$PATH\""
         ;;
 esac
